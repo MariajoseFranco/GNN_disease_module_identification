@@ -38,6 +38,7 @@ def convert_to_dgl_graph(ppi_graph: nx.Graph, seed_nodes: set, feature_dim=64):
         if node in id_map:
             labels[id_map[node]] = 1
     dgl_graph.ndata['label'] = labels
+    print("...done")
 
     return dgl_graph
 
