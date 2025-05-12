@@ -3,9 +3,7 @@ import warnings
 import numpy as np
 import scipy.sparse as sp
 import torch
-import torch.nn.functional as F
 from torch import nn
-from tqdm import tqdm
 
 from data_compilation import DataCompilation
 from GNN import GNN
@@ -21,26 +19,6 @@ class Main():
         self.selected_diseases = ["Albinism", "Alcohol Use Disorder"]
         self.DC = DataCompilation(path, self.selected_diseases)
         self.GPPI = GraphPPI()
-
-    def run_gnn(self, G_ppi, disease_pro_mapping, MIN_SEEDS=10):
-        for disease, all_seeds in tqdm(disease_pro_mapping.items()):
-            print(f"Processing: {disease} ({len(all_seeds)} raw seeds)")
-
-            seed_nodes = [node for node in all_seeds if node in G_ppi]
-            if len(seed_nodes) < MIN_SEEDS:
-                print("Skipped — not enough seeds in PPI")
-                continue
-
-    def train_gnn(self, model, data, edge_pairs, labels, epochs=100, lr=0.01):
-        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-        for epoch in range(epochs):
-            model.train()
-            optimizer.zero_grad()
-            preds = model(data.x, data.edge_index, edge_pairs)
-            loss = F.binary_cross_entropy_with_logits(preds, labels)
-            loss.backward()
-            optimizer.step()
-            print(f"Epoch {epoch+1}, Loss: {loss.item():.4f}")
 
     def main(self):
         df_pro_pro, df_gen_pro, df_dis_gen, df_dis_pro = self.DC.main()
