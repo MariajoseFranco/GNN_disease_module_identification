@@ -1,34 +1,31 @@
+import dgl.nn as dglnn
 import torch
 import torch.nn.functional as F
-from torch_geometric.nn import GCNConv
+from torch import nn
 
 
 class GNN(torch.nn.Module):
-    def __init__(self, in_channels, hidden_channels):
-        super(GNN, self).__init__()
-        self.conv1 = GCNConv(in_channels, hidden_channels)
-        self.conv2 = GCNConv(hidden_channels, hidden_channels)
-        self.classifier = torch.nn.Sequential(
-            torch.nn.Linear(2 * hidden_channels, hidden_channels),
-            torch.nn.ReLU(),
-            torch.nn.Linear(hidden_channels, 1)
+    def __init__(self, in_feats, hidden_feats):
+        super().__init__()
+        self.conv1 = dglnn.GraphConv(in_feats, hidden_feats)
+        self.conv2 = dglnn.GraphConv(hidden_feats, hidden_feats)
+        self.classifier = nn.Sequential(
+            nn.Linear(2 * hidden_feats, hidden_feats),
+            nn.ReLU(),
+            nn.Linear(hidden_feats, 1)
         )
 
-    def encode(self, x, edge_index):
-        print("Encoding...")
-        x = self.conv1(x, edge_index)
-        x = F.relu(x)
-        x = self.conv2(x, edge_index)
-        return x
+    def encode(self, g, x):
+        h = self.conv1(g, x)
+        h = F.relu(h)
+        h = self.conv2(g, h)
+        return h
 
-    def decode(self, z, edge_pairs):
-        print("Decoding...")
-        z1 = z[edge_pairs[0]]
-        z2 = z[edge_pairs[1]]
-        edge_feat = torch.cat([z1, z2], dim=1)
-        return self.classifier(edge_feat).view(-1)
+    def decode(self, z, u, v):
+        # Concatenate node embeddings of edge endpoints
+        z_uv = torch.cat([z[u], z[v]], dim=1)
+        return self.classifier(z_uv).squeeze()
 
-    def forward(self, x, edge_index, edge_pairs):
-        print("Forward propagation...")
-        z = self.encode(x, edge_index)
-        return self.decode(z, edge_pairs)
+    def forward(self, g, x, u, v):
+        z = self.encode(g, x)
+        return self.decode(z, u, v)

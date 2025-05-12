@@ -1,5 +1,4 @@
-import random
-
+import dgl
 import networkx as nx
 import torch
 from torch_geometric.data import Data
@@ -21,17 +20,27 @@ def generate_data(ppi_graph: nx.Graph, feature_dim=64):
     return Data(x=x, edge_index=edge_index), node_index
 
 
-def create_edge_labels(edge_index, num_nodes, num_neg_samples=1):
-    print("Create edge and labels")
-    pos_edges = edge_index.t().tolist()
-    neg_edges = set()
-    while len(neg_edges) < len(pos_edges) * num_neg_samples:
-        u, v = random.randint(0, num_nodes - 1), random.randint(0, num_nodes - 1)
-        if u != v and [u, v] not in pos_edges and [v, u] not in pos_edges:
-            neg_edges.add((u, v))
+def convert_to_dgl_graph(ppi_graph: nx.Graph, seed_nodes: set, feature_dim=64):
+    print("Converting NetworkX to DGLGraph")
 
-    all_edges = pos_edges + list(neg_edges)
-    edge_tensor = torch.tensor(all_edges, dtype=torch.long).t().contiguous()
-    labels = torch.cat([torch.ones(len(pos_edges)), torch.zeros(len(neg_edges))])
-    print("...done")
-    return edge_tensor, labels
+    # Convert to DGL graph
+    dgl_graph = dgl.from_networkx(ppi_graph)
+
+    # Assign node features
+    num_nodes = dgl_graph.num_nodes()
+    node_features = torch.randn((num_nodes, feature_dim))  # or torch.eye(num_nodes)
+    dgl_graph.ndata['feat'] = node_features
+
+    # Assign binary labels: 1 if in seed_nodes, 0 otherwise
+    id_map = {n: i for i, n in enumerate(ppi_graph.nodes())}
+    labels = torch.zeros(num_nodes, dtype=torch.long)
+    for node in seed_nodes:
+        if node in id_map:
+            labels[id_map[node]] = 1
+    dgl_graph.ndata['label'] = labels
+
+    return dgl_graph
+
+
+def edge_list_to_tensor(edge_list):
+    return torch.tensor(edge_list, dtype=torch.long).T  # shape [2, E]
