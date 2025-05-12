@@ -20,6 +20,49 @@ class Main():
         self.DC = DataCompilation(path, self.selected_diseases)
         self.GPPI = GraphPPI()
 
+    def train(
+            self,
+            model,
+            train_pos_u,
+            train_pos_v,
+            train_neg_u,
+            train_neg_v,
+            g,
+            features,
+            optimizer,
+            loss_fn
+    ):
+        for epoch in range(100):
+            model.train()
+
+            # Combine pos/neg edges
+            u_train = torch.cat([train_pos_u, train_neg_u])
+            v_train = torch.cat([train_pos_v, train_neg_v])
+            labels = torch.cat([torch.ones(len(train_pos_u)), torch.zeros(len(train_neg_u))])
+
+            logits = model(g, features, u_train, v_train)
+            loss = loss_fn(logits, labels)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            if epoch % 10 == 0:
+                print(f"Epoch {epoch} | Loss: {loss.item():.4f}")
+
+    def evaluate(self, model, test_pos_u, test_pos_v, test_neg_u, test_neg_v, g, features):
+        model.eval()
+        with torch.no_grad():
+            # Combine pos/neg edges
+            u_test = torch.cat([test_pos_u, test_neg_u])
+            v_test = torch.cat([test_pos_v, test_neg_v])
+            test_labels = torch.cat([torch.ones(len(test_pos_u)), torch.zeros(len(test_neg_u))])
+            test_logits = model(g, features, u_test, v_test)
+
+            preds = (torch.sigmoid(test_logits) > 0.5).float()
+            acc = (preds == test_labels).float().mean().item()
+            print(f"\nTest Accuracy: {acc:.4f}")
+
     def main(self):
         df_pro_pro, df_gen_pro, df_dis_gen, df_dis_pro = self.DC.main()
         G_ppi, disease_pro_mapping = self.GPPI.main(df_pro_pro, df_dis_pro)
@@ -71,36 +114,20 @@ class Main():
             test_neg_v = torch.tensor(test_neg_v, dtype=torch.long)
 
             # Training loop
-            for epoch in range(100):
-                model.train()
-
-                # Combine pos/neg edges
-                u_train = torch.cat([train_pos_u, train_neg_u])
-                v_train = torch.cat([train_pos_v, train_neg_v])
-                labels = torch.cat([torch.ones(len(train_pos_u)), torch.zeros(len(train_neg_u))])
-
-                logits = model(g, features, u_train, v_train)
-                loss = loss_fn(logits, labels)
-
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-
-                if epoch % 10 == 0:
-                    print(f"Epoch {epoch} | Loss: {loss.item():.4f}")
+            self.train(
+                model,
+                train_pos_u,
+                train_pos_v,
+                train_neg_u,
+                train_neg_v,
+                g,
+                features,
+                optimizer,
+                loss_fn
+            )
 
             # Evaluation
-            model.eval()
-            with torch.no_grad():
-                # Combine pos/neg edges
-                u_test = torch.cat([test_pos_u, test_neg_u])
-                v_test = torch.cat([test_pos_v, test_neg_v])
-                test_labels = torch.cat([torch.ones(len(test_pos_u)), torch.zeros(len(test_neg_u))])
-                test_logits = model(g, features, u_test, v_test)
-
-                preds = (torch.sigmoid(test_logits) > 0.5).float()
-                acc = (preds == test_labels).float().mean().item()
-                print(f"\nTest Accuracy: {acc:.4f}")
+            self.evaluate(model, test_pos_u, test_pos_v, test_neg_u, test_neg_v, g, features)
 
 
 if __name__ == "__main__":
