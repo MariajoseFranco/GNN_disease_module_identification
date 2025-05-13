@@ -1,6 +1,7 @@
 import warnings
 
 import numpy as np
+import pandas as pd
 import scipy.sparse as sp
 import torch
 from torch import nn
@@ -112,6 +113,10 @@ class Main():
         for disease in self.selected_diseases:
             print('\nDisease of interest: ', disease)
             seed_nodes = disease_pro_mapping[disease]
+            real_ppi_u = df_pro_pro[df_pro_pro['prA'].isin(seed_nodes)]
+            real_ppi_v = df_pro_pro[df_pro_pro['prB'].isin(seed_nodes)]
+            real_ppi = pd.concat([real_ppi_u, real_ppi_v])
+            real_ppi.drop_duplicates()
             g = convert_to_dgl_graph(G_ppi, seed_nodes)
             features = g.ndata['feat']
             u, v = g.edges()
@@ -166,9 +171,12 @@ class Main():
             )
 
             # Save predicted PPIs to a .txt file
-            with open(f"predicted_ppis_{disease}.txt", "w") as f:
+            with open(f"outputs/predicted_ppis_{disease}.txt", "w") as f:
                 for u, v in predicted_ppis:
                     f.write(f"{u}\t{v}\n")
+
+            # Save real PPIs to a .txt file
+            real_ppi.to_csv(f"outputs/real_ppis_{disease}.txt", sep="\t", index=False)
 
 
 if __name__ == "__main__":
