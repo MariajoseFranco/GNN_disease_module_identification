@@ -7,7 +7,8 @@ import torch
 from torch import nn
 
 from data_compilation import DataCompilation
-from GNN import GNN
+from GNN_conv import GNN
+# from GNN_sage import GNN
 from graph_creation import GraphPPI
 from utils import convert_to_dgl_graph
 
@@ -17,8 +18,7 @@ warnings.filterwarnings("ignore")
 class Main():
     def __init__(self, path):
         # Select the diseases to work with
-        self.selected_diseases = ["Albinism", "Alcohol Use Disorder"]
-        self.DC = DataCompilation(path, self.selected_diseases)
+        self.DC = DataCompilation(path)
         self.GPPI = GraphPPI()
 
     def pos_train_test_split(self, u, v, eids, test_size):
@@ -106,11 +106,14 @@ class Main():
         return predicted_ppis
 
     def main(self):
-        df_pro_pro, df_gen_pro, df_dis_gen, df_dis_pro = self.DC.main()
+        diseases = self.DC.get_diseases()
+        df_pro_pro, df_gen_pro, df_dis_gen, df_dis_pro, self.selected_diseases = self.DC.main(
+            diseases
+        )
         G_ppi, disease_pro_mapping = self.GPPI.main(df_pro_pro, df_dis_pro)
         node_list = list(G_ppi.nodes())
         node_index = {node: i for i, node in enumerate(node_list)}
-        for disease in self.selected_diseases:
+        for disease in self.selected_diseases[:3]:
             print('\nDisease of interest: ', disease)
             seed_nodes = disease_pro_mapping[disease]
             real_ppi_u = df_pro_pro[df_pro_pro['prA'].isin(seed_nodes)]
@@ -181,5 +184,4 @@ class Main():
 
 if __name__ == "__main__":
     path = "./data/"
-    # path = "/app/data/"
     Main(path).main()
