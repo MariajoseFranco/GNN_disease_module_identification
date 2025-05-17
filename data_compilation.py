@@ -55,6 +55,7 @@ class DataCompilation():
         )
         diseases_matched = self.get_matched_diseases(selected_diseases, unique_diseases)
         df_dis_pro = df_dis_pro[df_dis_pro['disease_name'].isin(diseases_matched)]
+        diseases_matched = diseases_matched[:3]  # esto se borra
         df_dis_pro_matched = df_dis_pro[df_dis_pro['disease_name'].isin(diseases_matched)]
         return df_dis_pro_matched, diseases_matched
 
