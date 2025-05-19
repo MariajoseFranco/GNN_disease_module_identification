@@ -1,4 +1,5 @@
 import pandas as pd
+from sklearn.preprocessing import LabelEncoder
 
 
 class DataCompilation():
@@ -54,14 +55,29 @@ class DataCompilation():
             lambda x: x.strip().lower().split()
         )
         diseases_matched = self.get_matched_diseases(selected_diseases, unique_diseases)
-        df_dis_pro = df_dis_pro[df_dis_pro['disease_name'].isin(diseases_matched)]
         diseases_matched = diseases_matched[:3]  # esto se borra
         df_dis_pro_matched = df_dis_pro[df_dis_pro['disease_name'].isin(diseases_matched)]
         return df_dis_pro_matched, diseases_matched
 
+    def encoding_diseases(self, df_dis_pro):
+        disease_encoder = LabelEncoder()
+        df_dis_pro['disease_id'] = disease_encoder.fit_transform(df_dis_pro['disease_name'])
+        return df_dis_pro
+
+    def encoding_proteins(self, df_pro_pro, df_dis_pro):
+        protein_encoder = LabelEncoder()
+        all_proteins = pd.concat([df_pro_pro['prA'], df_pro_pro['prB'], df_dis_pro['protein_id']])
+        protein_encoder.fit(all_proteins)
+        df_pro_pro['src_id'] = protein_encoder.transform(df_pro_pro['prA'])
+        df_pro_pro['dst_id'] = protein_encoder.transform(df_pro_pro['prB'])
+        df_dis_pro['protein_id_enc'] = protein_encoder.transform(df_dis_pro['protein_id'])
+        return df_pro_pro, df_dis_pro
+
     def main(self, selected_diseases):
         df_pro_pro, df_gen_pro, df_dis_gen = self.get_data()
-        df_dis_pro, diseases_matched = self.get_dis_pro_data(
+        df_dis_pro_matched, diseases_matched = self.get_dis_pro_data(
             df_dis_gen, df_gen_pro, selected_diseases
         )
-        return df_pro_pro, df_gen_pro, df_dis_gen, df_dis_pro, diseases_matched
+        df_dis_pro_encoded = self.encoding_diseases(df_dis_pro_matched)
+        df_pro_pro_encoded, df_dis_pro_encoded = self.encoding_proteins(df_pro_pro, df_dis_pro_encoded)
+        return df_pro_pro_encoded, df_gen_pro, df_dis_gen, df_dis_pro_encoded, diseases_matched

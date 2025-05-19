@@ -27,16 +27,16 @@ class GraphPPI():
 
     def create_heterogeneous_graph(self, df_dis_pro, df_pro_pro):
         # Encode proteins
-        protein_encoder = LabelEncoder()
-        all_proteins = pd.concat([df_pro_pro['prA'], df_pro_pro['prB'], df_dis_pro['protein_id']])
-        protein_encoder.fit(all_proteins)
-        df_pro_pro['src_id'] = protein_encoder.transform(df_pro_pro['prA'])
-        df_pro_pro['dst_id'] = protein_encoder.transform(df_pro_pro['prB'])
-        df_dis_pro['protein_id_enc'] = protein_encoder.transform(df_dis_pro['protein_id'])
+        # protein_encoder = LabelEncoder()
+        # all_proteins = pd.concat([df_pro_pro['prA'], df_pro_pro['prB'], df_dis_pro['protein_id']])
+        # protein_encoder.fit(all_proteins)
+        # df_pro_pro['src_id'] = protein_encoder.transform(df_pro_pro['prA'])
+        # df_pro_pro['dst_id'] = protein_encoder.transform(df_pro_pro['prB'])
+        # df_dis_pro['protein_id_enc'] = protein_encoder.transform(df_dis_pro['protein_id'])
 
         # Encode diseases
-        disease_encoder = LabelEncoder()
-        df_dis_pro['disease_id'] = disease_encoder.fit_transform(df_dis_pro['disease_name'])
+        # disease_encoder = LabelEncoder()
+        # df_dis_pro['disease_id'] = disease_encoder.fit_transform(df_dis_pro['disease_name'])
 
         # 2. Build heterograph dictionary
         data_dict = {
