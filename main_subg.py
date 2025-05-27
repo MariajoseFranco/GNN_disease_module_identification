@@ -181,12 +181,12 @@ class Main():
             )
 
             # Save predicted PPIs to a .txt file
-            with open(f"outputs/predicted_ppis_{disease}.txt", "w") as f:
+            with open(f"{self.output_path}/predicted_ppis_{disease}.txt", "w") as f:
                 for u, v in predicted_ppis:
                     f.write(f"{u}\t{v}\n")
 
             # Save real PPIs to a .txt file
-            real_ppi.to_csv(f"outputs/real_ppis_{disease}.txt", sep="\t", index=False)
+            real_ppi.to_csv(f"{self.output_path}/real_ppis_{disease}.txt", sep="\t", index=False)
 
 
 if __name__ == "__main__":
