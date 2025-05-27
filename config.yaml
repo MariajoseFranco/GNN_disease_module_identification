@@ -1,0 +1,9 @@
+# config.yaml
+
+# General Paths
+data_dir: "./data"
+inputs_dir: "./inputs"
+results_dir: "./outputs"
+
+# Specific files
+disease_txt: "./inputs/diseases.txt"

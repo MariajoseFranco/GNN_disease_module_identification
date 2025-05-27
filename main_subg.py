@@ -11,16 +11,22 @@ from data_compilation import DataCompilation
 from dot_predictor_subg import DotPredictor
 from GNN_sage import GNN
 from graph_creation import GraphPPI
-from utils import convert_to_dgl_graph
+from utils import convert_to_dgl_graph, load_config
 
 warnings.filterwarnings("ignore")
 
 
 class Main():
-    def __init__(self, path):
+    def __init__(self):
+        # Paths
+        self.config = load_config()
+        self.data_path = self.config['data_dir']
+        self.disease_path = self.config['disease_txt']
+        self.output_path = self.config['results_dir']
+
         # Select the diseases to work with
         self.selected_diseases = ["Albinism", "Alcohol Use Disorder"]
-        self.DC = DataCompilation(path)
+        self.DC = DataCompilation(self.data_path, self.disease_path)
         self.GPPI = GraphPPI()
         self.predictor = DotPredictor()
 
@@ -184,6 +190,4 @@ class Main():
 
 
 if __name__ == "__main__":
-    path = "./data/"
-    # path = "/app/data/"
-    Main(path).main()
+    Main().main()

@@ -3,6 +3,7 @@ import re
 import dgl
 import networkx as nx
 import torch
+import yaml
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 from nltk.tokenize import word_tokenize
@@ -67,3 +68,8 @@ def process_text(text):
     filtered_tokens = [token for token in cleaned_tokens if token not in stop_words]
     lemmatized_tokens = [lemmatizer.lemmatize(token) for token in filtered_tokens]
     return lemmatized_tokens
+
+
+def load_config(config_path='config.yaml'):
+    with open(config_path, 'r') as f:
+        return yaml.safe_load(f)

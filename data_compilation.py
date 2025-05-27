@@ -5,23 +5,24 @@ from utils import process_text
 
 
 class DataCompilation():
-    def __init__(self, path) -> None:
-        self.path = path
+    def __init__(self, data_path, disease_path) -> None:
+        self.data_path = data_path
+        self.disease_path = disease_path
 
     def get_diseases(self):
-        diseases = pd.read_csv('./inputs/diseases.txt', header=None)
+        diseases = pd.read_csv(self.disease_path, header=None)
         diseases = diseases.rename({0: 'DISEASE'}, axis=1)
         diseases['disease_cleaned'] = diseases['DISEASE'].apply(lambda x: process_text(x))
         return diseases
 
     def get_data(self):
         # Protein - Protein Interaction
-        df_pro_pro = pd.read_csv(f'{self.path}pro_pro.tsv', sep='\t')
+        df_pro_pro = pd.read_csv(f'{self.data_path}/pro_pro.tsv', sep='\t')
         df_pro_pro = df_pro_pro[df_pro_pro['prA'] != df_pro_pro['prB']]
         # Gen - Protein Interaction
-        df_gen_pro = pd.read_csv(f'{self.path}gen_pro.tsv', sep='\t')
+        df_gen_pro = pd.read_csv(f'{self.data_path}/gen_pro.tsv', sep='\t')
         # Disease - Gen Interaction
-        df_dis_gen = pd.read_csv(f'{self.path}dis_gen.tsv', sep='\t')
+        df_dis_gen = pd.read_csv(f'{self.data_path}/dis_gen.tsv', sep='\t')
         return df_pro_pro, df_gen_pro, df_dis_gen
 
     def get_matched_diseases(self, selected_diseases, unique_diseases):
@@ -77,5 +78,7 @@ class DataCompilation():
             df_dis_gen, df_gen_pro, selected_diseases
         )
         df_dis_pro_encoded = self.encoding_diseases(df_dis_pro_matched)
-        df_pro_pro_encoded, df_dis_pro_encoded = self.encoding_proteins(df_pro_pro, df_dis_pro_encoded)
+        df_pro_pro_encoded, df_dis_pro_encoded = self.encoding_proteins(
+            df_pro_pro, df_dis_pro_encoded
+        )
         return df_pro_pro_encoded, df_gen_pro, df_dis_gen, df_dis_pro_encoded, diseases_matched

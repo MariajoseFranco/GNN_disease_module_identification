@@ -14,19 +14,21 @@ from sklearn.metrics import roc_auc_score
 from data_compilation import DataCompilation
 from dot_predictor import DotPredictor
 from graph_creation import GraphPPI
-# from GNN_conv import GNN
-# from GNN_sage import GNN
 from heteroGNN import HeteroGNN as GNN
-
-# from utils import convert_to_dgl_graph
+from utils import load_config
 
 warnings.filterwarnings("ignore")
 
 
 class Main():
-    def __init__(self, path):
-        # Select the diseases to work with
-        self.DC = DataCompilation(path)
+    def __init__(self):
+        # Paths
+        self.config = load_config()
+        self.data_path = self.config['data_dir']
+        self.disease_path = self.config['disease_txt']
+        self.output_path = self.config['results_dir']
+
+        self.DC = DataCompilation(self.data_path, self.disease_path)
         self.GPPI = GraphPPI()
 
     def visualize_disease_protein_associations(self, g, diseases, max_edges=200):
@@ -372,9 +374,8 @@ class Main():
             disease_index_to_node, protein_index_to_node, seed_nodes
         )
         # Save predicted DISEASE-PROTEIN associations to a .txt file
-        predicted_dis_pro.to_csv("outputs/predicted_dis_pro.txt", sep="\t", index=False)
+        predicted_dis_pro.to_csv(f"{self.output_path}/predicted_dis_pro.txt", sep="\t", index=False)
 
 
 if __name__ == "__main__":
-    path = "./data/"
-    Main(path).main()
+    Main().main()
