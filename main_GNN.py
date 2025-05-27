@@ -2,8 +2,6 @@ import itertools
 import warnings
 
 import dgl
-import matplotlib.cm as cm
-import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
@@ -30,48 +28,6 @@ class Main():
         # Select the diseases to work with
         self.DC = DataCompilation(path)
         self.GPPI = GraphPPI()
-
-    def visualize_hetero_graph(self, g, edge_type=('disease', 'associates', 'protein'), num_nodes=100):
-        # Limit number of edges for visualization clarity
-        u, v = g.edges(etype=edge_type)
-        if len(u) > num_nodes:
-            u, v = u[:num_nodes], v[:num_nodes]
-
-        # Convert to NetworkX
-        nx_g = nx.DiGraph()
-        src_nodes = u.tolist()
-        dst_nodes = v.tolist()
-
-        src_type, edge_name, dst_type = g.to_canonical_etype(edge_type)
-
-        for src, dst in zip(src_nodes, dst_nodes):
-            nx_g.add_edge(f"{src_type}_{src}", f"{dst_type}_{dst}", label=edge_name)
-
-        # Draw graph
-        plt.figure(figsize=(10, 7))
-        pos = nx.spring_layout(nx_g, seed=42)
-        nx.draw(nx_g, pos, with_labels=True, node_size=500, font_size=8, arrows=True)
-        edge_labels = nx.get_edge_attributes(nx_g, 'label')
-        nx.draw_networkx_edge_labels(nx_g, pos, edge_labels=edge_labels, font_size=7)
-        plt.title(f"HeteroGraph view: {edge_type}")
-        plt.show()
-
-    def visualize_full_heterograph(self, g, max_edges=300):
-        nx_g = nx.DiGraph()
-
-        for etype in g.etypes:
-            src_type, _, dst_type = g.to_canonical_etype(etype)
-            u, v = g.edges(etype=etype)
-            for src, dst in zip(u.tolist()[:max_edges], v.tolist()[:max_edges]):
-                nx_g.add_edge(f"{src_type}_{src}", f"{dst_type}_{dst}", label=etype)
-
-        plt.figure(figsize=(12, 9))
-        pos = nx.spring_layout(nx_g, seed=42)
-        nx.draw(nx_g, pos, with_labels=True, node_size=400, font_size=6, arrows=True)
-        edge_labels = nx.get_edge_attributes(nx_g, 'label')
-        nx.draw_networkx_edge_labels(nx_g, pos, edge_labels=edge_labels, font_size=5)
-        plt.title("Full Heterogeneous Graph (subset)")
-        plt.show()
 
     def visualize_disease_protein_associations(self, g, diseases, max_edges=200):
         # Only use 'associates' edge type
@@ -121,72 +77,6 @@ class Main():
         plt.legend(handles=legend_elements, loc='upper right')
         plt.title("Disease–Protein Associations")
         plt.axis('off')
-        plt.tight_layout()
-        plt.show()
-
-    def visualize_colored_disease_protein_associations(self, g, etype=('disease', 'associates', 'protein')):
-        # Extract the subgraph with only disease-protein associations
-        sub_g = dgl.edge_type_subgraph(g, [etype])
-
-        # Convert to NetworkX
-        nx_g = nx.Graph()
-        color_map = {}
-        labels = {}
-
-        # Get edges and assign color based on disease ID
-        edges = zip(
-            sub_g.edges(etype=etype)[0].numpy(),  # diseases
-            sub_g.edges(etype=etype)[1].numpy()   # proteins
-        )
-
-        disease_nodes = sub_g.nodes('disease').numpy()
-        protein_nodes = sub_g.nodes('protein').numpy()
-
-        # Color palette
-        cmap = cm.get_cmap('tab10', len(disease_nodes))
-        node_colors = []
-        edge_colors = []
-
-        for idx, (src, dst) in enumerate(edges):
-            disease_id = src
-            protein_id = dst
-            disease_label = f'disease_{disease_id}'
-            protein_label = f'protein_{protein_id}'
-            color = mcolors.to_hex(cmap(disease_id % 10))  # cycle through 10 colors
-
-            # Add nodes and edges
-            nx_g.add_node(disease_label)
-            nx_g.add_node(protein_label)
-            nx_g.add_edge(disease_label, protein_label)
-
-            color_map[disease_label] = "#fcaeae"  # All diseases same color
-            color_map[protein_label] = color      # Color proteins based on disease
-            labels[disease_label] = disease_label
-            labels[protein_label] = protein_label
-
-        # Prepare layout
-        pos = nx.spring_layout(nx_g, k=0.3, iterations=50)
-        node_colors = [color_map[n] for n in nx_g.nodes()]
-
-        # Plot
-        plt.figure(figsize=(18, 12))
-        nx.draw(
-            nx_g,
-            pos,
-            with_labels=True,
-            node_color=node_colors,
-            edge_color='gray',
-            node_size=500,
-            font_size=8
-        )
-
-        # Legend
-        for i in range(len(disease_nodes)):
-            plt.scatter([], [], c=mcolors.to_hex(cmap(i % 10)), label=f'Disease {i}')
-        plt.scatter([], [], c="#fcaeae", label="Diseases (fixed color)")
-        plt.legend(scatterpoints=1, frameon=False, labelspacing=1, loc='upper right')
-
-        plt.title("Disease–Protein Associations (Colored by Disease)")
         plt.tight_layout()
         plt.show()
 
@@ -342,24 +232,12 @@ class Main():
             predicted_df.loc[mask, 'is_seed_node'] = predicted_df.loc[mask, 'protein'].isin(seeds)
         return predicted_df
 
-    def main(self):
-        diseases = self.DC.get_diseases()
-        df_pro_pro, df_gen_pro, df_dis_gen, df_dis_pro, self.selected_diseases = self.DC.main(
-            diseases
-        )
-        G_dispro, G_ppi, disease_pro_mapping = self.GPPI.main(df_pro_pro, df_dis_pro)
-        # self.visualize_hetero_graph(G_dispro, edge_type=('disease', 'associates', 'protein'))
-        # self.visualize_hetero_graph(G_dispro, edge_type=('protein', 'interacts', 'protein'))
-        # self.visualize_full_heterograph(G_dispro)
-        self.visualize_disease_protein_associations(G_dispro, diseases=[0, 1, 2], max_edges=100)
-        # self.visualize_colored_disease_protein_associations(G_dispro)
-
-        # node_list = list(G_ppi.nodes())
-        # node_index = {node: i for i, node in enumerate(node_list)}
-
+    def mapping_index_to_node(self, df_dis_pro, df_pro_pro):
         # Disease mapping
         disease_index_to_node = {
-            idx: disease for idx, disease in df_dis_pro[['disease_id', 'disease_name']].drop_duplicates().values
+            idx: disease for idx, disease in df_dis_pro[['disease_id', 'disease_name']]
+            .drop_duplicates()
+            .values
         }
 
         # Protein mapping
@@ -379,16 +257,26 @@ class Main():
         protein_index_to_node = {
             idx: protein for idx, protein in combined_mapping.values
         }
+        return disease_index_to_node, protein_index_to_node
 
+    def main(self):
+        diseases = self.DC.get_diseases()
+        df_pro_pro, df_gen_pro, df_dis_gen, df_dis_pro, self.selected_diseases = self.DC.main(
+            diseases
+        )
+        G_dispro, G_ppi, disease_pro_mapping = self.GPPI.main(df_pro_pro, df_dis_pro)
+        self.visualize_disease_protein_associations(G_dispro, diseases=[0, 1, 2], max_edges=100)
+
+        disease_index_to_node, protein_index_to_node = self.mapping_index_to_node(
+            df_dis_pro, df_pro_pro
+        )
         # the selected diseases in this moment are 28,
         # we need to match the 70 diseases and use them all
-        # g_homogeneous = convert_to_dgl_graph(G_ppi, seed_nodes)
-        g = G_dispro
         edge_type = ('disease', 'associates', 'protein')
-        u, v = g.edges(etype=edge_type)
+        u, v = G_dispro.edges(etype=edge_type)
 
         # Define test - train size sets
-        eids = np.arange(g.num_edges(etype=edge_type))
+        eids = np.arange(G_dispro.num_edges(etype=edge_type))
         eids = np.random.permutation(eids)
         test_size = int(len(eids) * 0.2)
 
@@ -399,48 +287,52 @@ class Main():
 
         # Negative edges
         train_neg_u, train_neg_v, test_neg_u, test_neg_v = self.sample_negative_edges(
-            g, edge_type, num_samples=len(train_pos_u), test_size=test_size
+            G_dispro, edge_type, num_samples=len(train_pos_u), test_size=test_size
         )
         # train_neg_u, train_neg_v, test_neg_u, test_neg_v = self.neg_train_test_split(
         #     u, v, g, test_size
         # )
 
-        train_g = dgl.remove_edges(g, eids[:test_size], etype=edge_type)
+        train_g = dgl.remove_edges(G_dispro, eids[:test_size], etype=edge_type)
         feat_dim = 64
-        g.nodes['disease'].data['feat'] = torch.randn(g.num_nodes('disease'), feat_dim)
-        g.nodes['protein'].data['feat'] = torch.randn(g.num_nodes('protein'), feat_dim)
+        G_dispro.nodes['disease'].data['feat'] = torch.randn(
+            G_dispro.num_nodes('disease'), feat_dim
+        )
+        G_dispro.nodes['protein'].data['feat'] = torch.randn(
+            G_dispro.num_nodes('protein'), feat_dim
+        )
         features = {
-            'disease': g.nodes['disease'].data['feat'],
-            'protein': g.nodes['protein'].data['feat']
+            'disease': G_dispro.nodes['disease'].data['feat'],
+            'protein': G_dispro.nodes['protein'].data['feat']
         }
 
         train_pos_g = dgl.heterograph(
             {edge_type: (train_pos_u, train_pos_v)},
             num_nodes_dict={
-                'disease': g.num_nodes('disease'),
-                'protein': g.num_nodes('protein')
+                'disease': G_dispro.num_nodes('disease'),
+                'protein': G_dispro.num_nodes('protein')
             }
         )
         train_neg_g = dgl.heterograph(
             {edge_type: (train_neg_u, train_neg_v)},
             num_nodes_dict={
-                'disease': g.num_nodes('disease'),
-                'protein': g.num_nodes('protein')
+                'disease': G_dispro.num_nodes('disease'),
+                'protein': G_dispro.num_nodes('protein')
             }
         )
 
         test_pos_g = dgl.heterograph(
             {edge_type: (test_pos_u, test_pos_v)},
             num_nodes_dict={
-                'disease': g.num_nodes('disease'),
-                'protein': g.num_nodes('protein')
+                'disease': G_dispro.num_nodes('disease'),
+                'protein': G_dispro.num_nodes('protein')
             }
         )
         test_neg_g = dgl.heterograph(
             {edge_type: (test_neg_u, test_neg_v)},
             num_nodes_dict={
-                'disease': g.num_nodes('disease'),
-                'protein': g.num_nodes('protein')
+                'disease': G_dispro.num_nodes('disease'),
+                'protein': G_dispro.num_nodes('protein')
             }
         )
 
@@ -471,7 +363,7 @@ class Main():
 
         seed_nodes = {}
         for disease in self.selected_diseases:
-            df = df_dis_pro[df_dis_pro['disease_name']==disease]
+            df = df_dis_pro[df_dis_pro['disease_name'] == disease]
             tuple_seed_nodes = tuple(df['protein_id'])
             seed_nodes[disease] = tuple_seed_nodes
 
@@ -479,19 +371,8 @@ class Main():
             pos_score, neg_score, test_pos_u, test_pos_v, test_neg_u, test_neg_v,
             disease_index_to_node, protein_index_to_node, seed_nodes
         )
+        # Save predicted DISEASE-PROTEIN associations to a .txt file
         predicted_dis_pro.to_csv("outputs/predicted_dis_pro.txt", sep="\t", index=False)
-
-        # predicted_ppis = self.obtaining_ppi_predicted(
-        #     node_index, preds, u_test, v_test
-        # )
-
-        # Save predicted PPIs to a .txt file
-        # with open(f"outputs/predicted_ppis_{disease}.txt", "w") as f:
-        #     for u, v in predicted_ppis:
-        #         f.write(f"{u}\t{v}\n")
-
-        # # Save real PPIs to a .txt file
-        # real_ppi.to_csv(f"outputs/real_ppis_{disease}.txt", sep="\t", index=False)
 
 
 if __name__ == "__main__":
