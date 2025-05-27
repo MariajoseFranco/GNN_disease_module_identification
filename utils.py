@@ -1,6 +1,11 @@
+import re
+
 import dgl
 import networkx as nx
 import torch
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
+from nltk.tokenize import word_tokenize
 from torch_geometric.data import Data
 
 
@@ -45,3 +50,20 @@ def convert_to_dgl_graph(ppi_graph: nx.Graph, seed_nodes: set, feature_dim=64):
 
 def edge_list_to_tensor(edge_list):
     return torch.tensor(edge_list, dtype=torch.long).T  # shape [2, E]
+
+
+def process_text(text):
+    stop_words = set(stopwords.words('english'))
+    lemmatizer = WordNetLemmatizer()
+
+    tokens = word_tokenize(text)
+
+    cleaned_tokens = []
+    for token in tokens:
+        parts = re.split(r'[^a-zA-Z0-9]+', token)
+        for part in parts:
+            if part:  # Skip empty strings
+                cleaned_tokens.append(part.lower())
+    filtered_tokens = [token for token in cleaned_tokens if token not in stop_words]
+    lemmatized_tokens = [lemmatizer.lemmatize(token) for token in filtered_tokens]
+    return lemmatized_tokens
