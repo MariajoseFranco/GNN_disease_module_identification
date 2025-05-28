@@ -3,7 +3,6 @@ import warnings
 
 import numpy as np
 import pandas as pd
-import scipy.sparse as sp
 import torch
 from torch import nn
 
@@ -11,7 +10,9 @@ from data_compilation import DataCompilation
 from dot_predictor_subg import DotPredictor
 from GNN_sage import GNN
 from graph_creation import GraphPPI
-from utils import convert_to_dgl_graph, load_config
+from utils import load_config, mapping_diseases_to_proteins
+from utils import neg_train_test_split_subg as neg_train_test_split
+from utils import pos_train_test_split
 
 warnings.filterwarnings("ignore")
 
@@ -24,45 +25,25 @@ class Main():
         self.disease_path = self.config['disease_txt']
         self.output_path = self.config['results_dir']
 
-        # Select the diseases to work with
-        self.selected_diseases = ["Albinism", "Alcohol Use Disorder"]
         self.DC = DataCompilation(self.data_path, self.disease_path)
         self.GPPI = GraphPPI()
         self.predictor = DotPredictor()
-
-    def pos_train_test_split(self, u, v, eids, test_size):
-        test_pos_u, test_pos_v = u[eids[:test_size]], v[eids[:test_size]]
-        train_pos_u, train_pos_v = u[eids[test_size:]], v[eids[test_size:]]
-        return train_pos_u, train_pos_v, test_pos_u, test_pos_v
-
-    def neg_train_test_split(self, u, v, g, test_size):
-        adj = sp.coo_matrix((np.ones(len(u)), (u.numpy(), v.numpy())))
-        adj_neg = 1 - adj.todense() - np.eye(g.num_nodes())
-        neg_u, neg_v = np.where(adj_neg != 0)
-
-        neg_eids = np.random.choice(len(neg_u), g.num_edges())
-        test_neg_u, test_neg_v = (
-            neg_u[neg_eids[:test_size]],
-            neg_v[neg_eids[:test_size]],
-        )
-        train_neg_u, train_neg_v = (
-            neg_u[neg_eids[test_size:]],
-            neg_v[neg_eids[test_size:]],
-        )
-        return train_neg_u, train_neg_v, test_neg_u, test_neg_v
-
-    def convert_to_tensors(self, train_u, train_v, test_u, test_v):
-        train_u = torch.tensor(train_u, dtype=torch.long)
-        train_v = torch.tensor(train_v, dtype=torch.long)
-        test_u = torch.tensor(test_u, dtype=torch.long)
-        test_v = torch.tensor(test_v, dtype=torch.long)
-        return train_u, train_v, test_u, test_v
+        self.epochs = 100
 
     def training_loop(
-            self, model, predictor, train_pos_u, train_pos_v, train_neg_u,
-            train_neg_v, g, features, optimizer, loss_fn
+            self,
+            model,
+            predictor,
+            train_pos_u,
+            train_pos_v,
+            train_neg_u,
+            train_neg_v,
+            g,
+            features,
+            optimizer,
+            loss_fn
     ):
-        for epoch in range(100):
+        for epoch in range(self.epochs):
             model.train()
 
             h = model(g, features)
@@ -78,8 +59,8 @@ class Main():
             loss.backward()
             optimizer.step()
 
-            if epoch % 10 == 0:
-                print(f"Epoch {epoch} | Loss: {loss.item():.4f}")
+            if epoch % 5 == 0:
+                print("In epoch {}, loss: {}".format(epoch, loss))
 
     def evaluating_model(
             self, model, predictor, test_pos_u, test_pos_v, test_neg_u, test_neg_v, g, features
@@ -114,7 +95,8 @@ class Main():
         df_pro_pro, df_gen_pro, df_dis_gen, df_dis_pro, self.selected_diseases = self.DC.main(
             diseases
         )
-        G_dispro, G_ppi, disease_pro_mapping = self.GPPI.main(df_pro_pro, df_dis_pro)
+        G_ppi = self.GPPI.create_homogeneous_graph(df_pro_pro)
+        disease_pro_mapping = mapping_diseases_to_proteins(df_dis_pro)
         node_list = list(G_ppi.nodes())
         node_index = {node: i for i, node in enumerate(node_list)}
         for disease in self.selected_diseases:
@@ -124,7 +106,7 @@ class Main():
             real_ppi_v = df_pro_pro[df_pro_pro['prB'].isin(seed_nodes)]
             real_ppi = pd.concat([real_ppi_u, real_ppi_v])
             real_ppi.drop_duplicates()
-            g = convert_to_dgl_graph(G_ppi, seed_nodes)
+            g = self.GPPI.convert_networkx_to_dgl_graph(G_ppi, seed_nodes)
             features = g.ndata['feat']
             u, v = g.edges()
 
@@ -134,12 +116,12 @@ class Main():
             test_size = int(len(eids) * 0.2)
 
             # Positive edges (real)
-            train_pos_u, train_pos_v, test_pos_u, test_pos_v = self.pos_train_test_split(
+            train_pos_u, train_pos_v, test_pos_u, test_pos_v = pos_train_test_split(
                 u, v, eids, test_size
             )
 
             # Negative edges
-            train_neg_u, train_neg_v, test_neg_u, test_neg_v = self.neg_train_test_split(
+            train_neg_u, train_neg_v, test_neg_u, test_neg_v = neg_train_test_split(
                 u, v, g, test_size
             )
 
@@ -151,10 +133,10 @@ class Main():
             loss_fn = nn.BCEWithLogitsLoss()
 
             # Convert edge sets to tensors
-            train_pos_u, train_pos_v, test_pos_u, test_pos_v = self.convert_to_tensors(
+            train_pos_u, train_pos_v, test_pos_u, test_pos_v = self.GPPI.convert_to_tensors(
                 train_pos_u, train_pos_v, test_pos_u, test_pos_v
             )
-            train_neg_u, train_neg_v, test_neg_u, test_neg_v = self.convert_to_tensors(
+            train_neg_u, train_neg_v, test_neg_u, test_neg_v = self.GPPI.convert_to_tensors(
                 train_neg_u, train_neg_v, test_neg_u, test_neg_v
             )
 
