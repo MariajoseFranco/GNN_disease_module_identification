@@ -42,11 +42,27 @@ class Main():
             pred,
             edge_type
     ):
+        """
+        Trains the GNN model on a heterogeneous graph for link prediction.
+
+        Args:
+            model (nn.Module): The GNN model.
+            train_pos_g (DGLGraph): Graph containing positive training edges.
+            train_neg_g (DGLGraph): Graph containing negative training edges.
+            train_g (DGLGraph): The full graph (minus test edges) for message passing.
+            features (dict): Node feature dictionary by node type.
+            optimizer (torch.optim.Optimizer): Optimizer for the model.
+            pred (DotPredictor): Predictor module to compute edge scores.
+            edge_type (tuple): The edge type to predict (source, relation, target).
+
+        Returns:
+            dict: Node embeddings after training.
+        """
         for epoch in range(self.epochs):
             # forward
             h = model(train_g, features)
-            pos_score = pred(train_pos_g, h, edge_type)
-            neg_score = pred(train_neg_g, h, edge_type)
+            pos_score = pred(train_pos_g, h, etype=edge_type)
+            neg_score = pred(train_neg_g, h, etype=edge_type)
             loss = self.compute_loss(pos_score, neg_score)
 
             # backward
@@ -59,14 +75,40 @@ class Main():
         return h
 
     def evaluating_model(self, test_pos_g, test_neg_g, pred, h, edge_type):
+        """
+        Evaluates the trained model using AUC on the test set.
+
+        Args:
+            test_pos_g (DGLGraph): Graph with positive test edges.
+            test_neg_g (DGLGraph): Graph with negative test edges.
+            pred (DotPredictor): Predictor module to compute edge scores.
+            h (dict): Node embeddings from the trained model.
+            edge_type (tuple): The edge type for prediction.
+
+        Returns:
+            tuple: (pos_score, neg_score, labels)
+                - pos_score (Tensor): Scores for positive test edges.
+                - neg_score (Tensor): Scores for negative test edges.
+                - labels (ndarray): Ground truth labels (1 for positive, 0 for negative).
+        """
         with torch.no_grad():
-            pos_score = pred(test_pos_g, h, edge_type)
-            neg_score = pred(test_neg_g, h, edge_type)
+            pos_score = pred(test_pos_g, h, etype=edge_type)
+            neg_score = pred(test_neg_g, h, etype=edge_type)
             auc, labels = self.compute_auc(pos_score, neg_score)
             print("AUC", auc)
             return pos_score, neg_score, labels
 
     def compute_loss(self, pos_score, neg_score):
+        """
+        Computes binary cross-entropy loss for link prediction.
+
+        Args:
+            pos_score (Tensor): Model scores for positive edges.
+            neg_score (Tensor): Model scores for negative edges.
+
+        Returns:
+            Tensor: The binary cross-entropy loss.
+        """
         scores = torch.cat([pos_score, neg_score])
         labels = torch.cat(
             [torch.ones(pos_score.shape[0]), torch.zeros(neg_score.shape[0])]
@@ -74,6 +116,18 @@ class Main():
         return F.binary_cross_entropy_with_logits(scores, labels)
 
     def compute_auc(self, pos_score, neg_score):
+        """
+        Computes the AUC metric for link prediction.
+
+        Args:
+            pos_score (Tensor): Model scores for positive edges.
+            neg_score (Tensor): Model scores for negative edges.
+
+        Returns:
+            tuple: (auc, labels)
+                - auc (float): The computed AUC score.
+                - labels (ndarray): Ground truth labels for the test edges.
+        """
         scores = torch.cat([pos_score, neg_score]).numpy()
         labels = torch.cat(
             [torch.ones(pos_score.shape[0]), torch.zeros(neg_score.shape[0])]
@@ -92,6 +146,25 @@ class Main():
             protein_index_to_node,
             seed_nodes
     ):
+        """
+        Maps predicted edges from indices to disease-protein pairs
+        and annotates with seed information.
+
+        Args:
+            pos_score (Tensor): Scores for positive test edges.
+            neg_score (Tensor): Scores for negative test edges.
+            test_pos_u (Tensor): Source nodes of positive test edges.
+            test_pos_v (Tensor): Target nodes of positive test edges.
+            test_neg_u (Tensor): Source nodes of negative test edges.
+            test_neg_v (Tensor): Target nodes of negative test edges.
+            disease_index_to_node (dict): Mapping from node indices to disease names.
+            protein_index_to_node (dict): Mapping from node indices to protein IDs.
+            seed_nodes (dict): Mapping from disease names to their known seed proteins.
+
+        Returns:
+            pd.DataFrame: DataFrame of predicted disease-protein
+            associations with seed node annotation.
+        """
         # Convert logits to probabilities
         all_scores = torch.cat([pos_score, neg_score])
         probs = torch.sigmoid(all_scores)
@@ -120,6 +193,21 @@ class Main():
         return predicted_df
 
     def main(self):
+        """
+        Executes the full pipeline for link prediction using a heterogeneous graph:
+            - Loads and processes data.
+            - Builds a heterogeneous disease-protein interaction graph.
+            - Visualizes disease-protein associations.
+            - Splits edges into train/test sets (positive and negative samples).
+            - Trains a GNN model for link prediction.
+            - Evaluates model performance using AUC.
+            - Maps predicted disease-protein associations to node names.
+            - Marks if predicted proteins are seed nodes.
+            - Saves predicted associations as a .txt file.
+
+        Returns:
+            None
+        """
         diseases = self.DC.get_diseases()
         df_pro_pro, df_gen_pro, df_dis_gen, df_dis_pro, self.selected_diseases = self.DC.main(
             diseases

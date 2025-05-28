@@ -7,7 +7,7 @@ import torch
 from torch import nn
 
 from data_compilation import DataCompilation
-from dot_predictor_subg import DotPredictor
+from dot_predictor import DotPredictor
 from GNN_sage import GNN
 from graph_creation import GraphPPI
 from utils import load_config, mapping_diseases_to_proteins
@@ -43,6 +43,24 @@ class Main():
             optimizer,
             loss_fn
     ):
+        """
+        Trains the GNN model for link prediction using positive and negative edges.
+
+        Args:
+            model (nn.Module): The GNN model.
+            predictor (nn.Module): The predictor module that computes edge scores.
+            train_pos_u (Tensor): Source nodes of positive training edges.
+            train_pos_v (Tensor): Destination nodes of positive training edges.
+            train_neg_u (Tensor): Source nodes of negative training edges.
+            train_neg_v (Tensor): Destination nodes of negative training edges.
+            g (DGLGraph): The homogeneous protein-protein interaction graph.
+            features (Tensor): Node feature matrix.
+            optimizer (torch.optim.Optimizer): Optimizer for training.
+            loss_fn (torch.nn.Module): Loss function (e.g., BCEWithLogitsLoss).
+
+        Returns:
+            None: Trains the model in-place.
+        """
         for epoch in range(self.epochs):
             model.train()
 
@@ -52,7 +70,7 @@ class Main():
             v_train = torch.cat([train_pos_v, train_neg_v])
             labels = torch.cat([torch.ones(len(train_pos_u)), torch.zeros(len(train_neg_u))])
 
-            logits = predictor(g, h, u_train, v_train)
+            logits = predictor(g, h, u=u_train, v=v_train)
             loss = loss_fn(logits, labels)
 
             optimizer.zero_grad()
@@ -65,6 +83,25 @@ class Main():
     def evaluating_model(
             self, model, predictor, test_pos_u, test_pos_v, test_neg_u, test_neg_v, g, features
     ):
+        """
+        Evaluates the trained model on test edges and computes accuracy.
+
+        Args:
+            model (nn.Module): The GNN model.
+            predictor (nn.Module): The predictor module for edge scores.
+            test_pos_u (Tensor): Source nodes of positive test edges.
+            test_pos_v (Tensor): Destination nodes of positive test edges.
+            test_neg_u (Tensor): Source nodes of negative test edges.
+            test_neg_v (Tensor): Destination nodes of negative test edges.
+            g (DGLGraph): The homogeneous graph.
+            features (Tensor): Node feature matrix.
+
+        Returns:
+            tuple: (predictions, u_test, v_test)
+                - predictions (Tensor): Binary predictions for test edges.
+                - u_test (Tensor): Source nodes for test edges.
+                - v_test (Tensor): Destination nodes for test edges.
+        """
         model.eval()
         with torch.no_grad():
             h = model(g, features)
@@ -79,6 +116,18 @@ class Main():
             return preds, u_test, v_test
 
     def obtaining_ppi_predicted(self, node_index, preds, u_test, v_test):
+        """
+        Converts predicted test edges (indices) into protein-protein pairs.
+
+        Args:
+            node_index (dict): Mapping from node indices to protein names.
+            preds (Tensor): Binary predictions for test edges.
+            u_test (Tensor): Source node indices of test edges.
+            v_test (Tensor): Destination node indices of test edges.
+
+        Returns:
+            list: List of predicted protein-protein interaction pairs (tuples).
+        """
         index_node = {i: n for n, i in node_index.items()}
         pred_positive_indices = (preds == 1).nonzero(as_tuple=True)[0]
         predicted_ppis = []
@@ -91,6 +140,18 @@ class Main():
         return predicted_ppis
 
     def main(self):
+        """
+        Executes the full pipeline for link prediction:
+            - Loads and processes data.
+            - Builds homogeneous graph.
+            - Splits edges into train/test sets.
+            - Trains a GNN model.
+            - Evaluates model performance.
+            - Extracts and saves predicted and real PPIs for each disease.
+
+        Returns:
+            None
+        """
         diseases = self.DC.get_diseases()
         df_pro_pro, df_gen_pro, df_dis_gen, df_dis_pro, self.selected_diseases = self.DC.main(
             diseases

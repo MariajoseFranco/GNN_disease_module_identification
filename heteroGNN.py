@@ -19,6 +19,21 @@ class HeteroGNN(nn.Module):
         }, aggregate='sum')
 
     def forward(self, g, inputs):  # inputs is a dict of node features
+        """
+        Perform a forward pass of the Heterogeneous GNN model.
+
+        The model applies two layers of heterogeneous graph convolutions (SAGEConv),
+        using ReLU activations after the first layer.
+
+        Args:
+            g (dgl.DGLHeteroGraph): The input heterogeneous graph.
+            inputs (dict): A dictionary mapping node types (e.g., 'disease', 'protein')
+                        to their corresponding feature tensors.
+
+        Returns:
+            dict: A dictionary of output node embeddings, with keys being node types and
+                values being the corresponding feature tensors after the second GNN layer.
+        """
         h = self.layers1(g, inputs)
         h = {k: F.relu(v) for k, v in h.items()}
         h = self.layers2(g, h)

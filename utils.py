@@ -14,11 +14,29 @@ from nltk.tokenize import word_tokenize
 
 
 def load_config(config_path='config.yaml'):
+    """
+    Load configuration parameters from a YAML file.
+
+    Args:
+        config_path (str): Path to the YAML configuration file. Defaults to 'config.yaml'.
+
+    Returns:
+        dict: Parsed configuration dictionary.
+    """
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
 
 
 def process_text(text):
+    """
+    Preprocess a text string by tokenizing, lowercasing, removing stopwords, and lemmatizing.
+
+    Args:
+        text (str): Input text string.
+
+    Returns:
+        list: A list of cleaned and lemmatized tokens from the input text.
+    """
     stop_words = set(stopwords.words('english'))
     lemmatizer = WordNetLemmatizer()
 
@@ -39,22 +57,31 @@ def process_text(text):
 
 def mapping_diseases_to_proteins(df_dis_pro: pd.DataFrame) -> dict:
     """
-    Map the disease to the proteins that are associated with it
+    Map each disease to its associated proteins.
 
     Args:
-        df_dis_pro: dataframe containing information about
-        the interaction between proteins and diseases
+        df_dis_pro (pd.DataFrame): DataFrame containing disease-protein associations.
 
     Returns:
-        dict: dictionary where the keys are the diseases of
-        interest and the value for each key (disease) is the
-        set of proteins that are present in that disease
+        dict: Dictionary mapping disease names to sets of associated proteins.
     """
     disease_pro_mapping = df_dis_pro.groupby("disease_name")["protein_id"].apply(set).to_dict()
     return disease_pro_mapping
 
 
 def mapping_index_to_node(df_dis_pro, df_pro_pro):
+    """
+    Create dictionaries mapping node indices to node names for diseases and proteins.
+
+    Args:
+        df_dis_pro (pd.DataFrame): DataFrame with disease-protein associations and encoded IDs.
+        df_pro_pro (pd.DataFrame): DataFrame with protein-protein interactions and encoded IDs.
+
+    Returns:
+        tuple:
+            - disease_index_to_node (dict): Maps disease IDs to disease names.
+            - protein_index_to_node (dict): Maps protein IDs to protein names.
+    """
     # Disease mapping
     disease_index_to_node = {
         idx: disease for idx, disease in df_dis_pro[['disease_id', 'disease_name']]
@@ -85,6 +112,17 @@ def mapping_index_to_node(df_dis_pro, df_pro_pro):
 # Visualization Functions
 
 def visualize_disease_protein_associations(g, diseases, max_edges=200):
+    """
+    Visualize disease-protein associations from a heterogeneous graph using NetworkX and Matplotlib.
+
+    Args:
+        g (dgl.DGLHeteroGraph): The heterogeneous graph containing disease-protein associations.
+        diseases (list): List of disease node indices to visualize.
+        max_edges (int): Maximum number of edges to plot. Defaults to 200.
+
+    Returns:
+        None
+    """
     # Only use 'associates' edge type
     etype = ('disease', 'associates', 'protein')
     src, dst = g.edges(etype=etype)
@@ -138,12 +176,36 @@ def visualize_disease_protein_associations(g, diseases, max_edges=200):
 # Train/Test Split Functions
 
 def pos_train_test_split(u, v, eids, test_size):
+    """
+    Split positive edges into training and test sets for link prediction.
+
+    Args:
+        u (Tensor): Source node indices of positive edges.
+        v (Tensor): Target node indices of positive edges.
+        eids (array-like): Array of shuffled edge indices.
+        test_size (int): Number of edges to include in the test set.
+
+    Returns:
+        tuple: (train_pos_u, train_pos_v, test_pos_u, test_pos_v)
+    """
     test_pos_u, test_pos_v = u[eids[:test_size]], v[eids[:test_size]]
     train_pos_u, train_pos_v = u[eids[test_size:]], v[eids[test_size:]]
     return train_pos_u, train_pos_v, test_pos_u, test_pos_v
 
 
 def neg_train_test_split_gnn(g, etype, num_samples, test_size):
+    """
+    Generate and split negative samples for a heterogeneous graph (DGL format).
+
+    Args:
+        g (dgl.DGLHeteroGraph): The heterogeneous graph.
+        etype (tuple): The edge type tuple (src_type, relation, dst_type).
+        num_samples (int): Number of negative samples to generate.
+        test_size (int): Number of negative edges to include in the test set.
+
+    Returns:
+        tuple: (train_neg_u, train_neg_v, test_neg_u, test_neg_v)
+    """
     src_type, _, dst_type = g.to_canonical_etype(etype)
 
     # Sample negative candidate edges
@@ -169,6 +231,18 @@ def neg_train_test_split_gnn(g, etype, num_samples, test_size):
 
 
 def neg_train_test_split_subg(u, v, g, test_size):
+    """
+    Generate and split negative samples for a homogeneous graph using adjacency matrices.
+
+    Args:
+        u (Tensor): Source node indices of positive edges.
+        v (Tensor): Target node indices of positive edges.
+        g (dgl.DGLGraph): The homogeneous graph.
+        test_size (int): Number of negative edges to include in the test set.
+
+    Returns:
+        tuple: (train_neg_u, train_neg_v, test_neg_u, test_neg_v)
+    """
     adj = sp.coo_matrix((np.ones(len(u)), (u.numpy(), v.numpy())))
     adj_neg = 1 - adj.todense() - np.eye(g.num_nodes())
     neg_u, neg_v = np.where(adj_neg != 0)
