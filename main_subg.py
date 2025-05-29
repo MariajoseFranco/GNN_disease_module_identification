@@ -108,7 +108,7 @@ class Main():
             u_test = torch.cat([test_pos_u, test_neg_u])
             v_test = torch.cat([test_pos_v, test_neg_v])
             test_labels = torch.cat([torch.ones(len(test_pos_u)), torch.zeros(len(test_neg_u))])
-            test_logits = predictor(g, h, u_test, v_test)
+            test_logits = predictor(g, h, u=u_test, v=v_test)
 
             preds = (torch.sigmoid(test_logits) > 0.5).float()
             acc = (preds == test_labels).float().mean().item()
