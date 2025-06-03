@@ -210,7 +210,7 @@ class Main():
         """
         diseases = self.DC.get_diseases()
         df_pro_pro, df_gen_pro, df_dis_gen, df_dis_pro, self.selected_diseases = self.DC.main(
-            diseases
+            diseases, self.output_path
         )
         seed_edge_scores = {(row['disease_id'], row['protein_id_enc']): row['score']
                             for idx, row in df_dis_pro.iterrows()}

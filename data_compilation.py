@@ -72,7 +72,7 @@ class DataCompilation():
         diseases_matched = unique_diseases['disease_name'].to_list()
         return diseases_matched
 
-    def get_dis_pro_data(self, df_dis_gen, df_gen_pro, selected_diseases):
+    def get_dis_pro_data(self, df_dis_gen, df_gen_pro, selected_diseases, output_path):
         """
         Merge the disease-gene and gene-protein datasets to create disease-protein interactions.
         Filters the data to include only the diseases matched with the selected list.
@@ -81,6 +81,7 @@ class DataCompilation():
             df_dis_gen (pd.DataFrame): Disease-Gene interaction data.
             df_gen_pro (pd.DataFrame): Gene-Protein interaction data.
             selected_diseases (pd.DataFrame): Preprocessed diseases to match.
+            output_path (str): Path were the outputs are going to be stored.
 
         Returns:
             tuple:
@@ -100,6 +101,9 @@ class DataCompilation():
             lambda x: process_text(x)
         )
         diseases_matched = self.get_matched_diseases(selected_diseases, unique_diseases)
+        pd.DataFrame(diseases_matched, columns=['Disease']).to_csv(
+            f'{output_path}/diseases_of_interest.csv', index=False
+        )
         diseases_matched = diseases_matched[:3]  # esto se borra
         df_dis_pro_matched = df_dis_pro[df_dis_pro['disease_name'].isin(diseases_matched)]
         return df_dis_pro_matched, diseases_matched
@@ -142,7 +146,7 @@ class DataCompilation():
         df_dis_pro['protein_id_enc'] = protein_encoder.transform(df_dis_pro['protein_id'])
         return df_pro_pro, df_dis_pro
 
-    def main(self, selected_diseases):
+    def main(self, selected_diseases, output_path):
         """
         Executes the data preparation pipeline:
             - Loads interaction data.
@@ -153,6 +157,7 @@ class DataCompilation():
         Args:
             selected_diseases (pd.DataFrame): DataFrame containing the preprocessed
             selected diseases.
+            output_path (str): Path were the outputs are going to be stored
 
         Returns:
             tuple:
@@ -164,7 +169,7 @@ class DataCompilation():
         """
         df_pro_pro, df_gen_pro, df_dis_gen = self.get_data()
         df_dis_pro_matched, diseases_matched = self.get_dis_pro_data(
-            df_dis_gen, df_gen_pro, selected_diseases
+            df_dis_gen, df_gen_pro, selected_diseases, output_path
         )
         df_dis_pro_encoded = self.encoding_diseases(df_dis_pro_matched)
         df_pro_pro_encoded, df_dis_pro_encoded = self.encoding_proteins(
