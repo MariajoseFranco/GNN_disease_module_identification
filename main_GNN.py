@@ -212,14 +212,25 @@ class Main():
         df_pro_pro, df_gen_pro, df_dis_gen, df_dis_pro, self.selected_diseases = self.DC.main(
             diseases
         )
+        seed_edge_scores = {(row['disease_id'], row['protein_id_enc']): row['score']
+                            for idx, row in df_dis_pro.iterrows()}
         G_dispro = self.GPPI.create_heterogeneous_graph(df_dis_pro, df_pro_pro)
-        visualize_disease_protein_associations(G_dispro, diseases=[0, 1, 2], max_edges=100)
 
         disease_index_to_node, protein_index_to_node = mapping_index_to_node(
             df_dis_pro, df_pro_pro
         )
         edge_type = ('disease', 'associates', 'protein')
         u, v = G_dispro.edges(etype=edge_type)
+
+        num_edges = G_dispro.num_edges(etype=edge_type)
+        seed_score_tensor = torch.zeros(num_edges, 1)
+
+        for i, (src, dst) in enumerate(zip(u.tolist(), v.tolist())):
+            if (src, dst) in seed_edge_scores:
+                seed_score_tensor[i] = seed_edge_scores[(src, dst)]
+
+        G_dispro.edges[edge_type].data['seed_score'] = seed_score_tensor
+        visualize_disease_protein_associations(G_dispro, diseases=[0, 1, 2], max_edges=100)
 
         # Define test - train size sets
         eids = np.arange(G_dispro.num_edges(etype=edge_type))

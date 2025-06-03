@@ -129,4 +129,34 @@ class GraphPPI():
                 'protein': G_dispro.num_nodes('protein')
             }
         )
+        # Find edge IDs in the original graph that match (u, v)
+        u_all, v_all = G_dispro.edges(etype=edge_type)
+        edge_to_id = {
+            (src.item(), dst.item()): idx for idx, (src, dst) in enumerate(zip(u_all, v_all))
+        }
+
+        edge_ids = []
+        mask = []  # True for found, False for not found
+        for src, dst in zip(u.tolist(), v.tolist()):
+            eid = edge_to_id.get((src, dst))
+            if eid is not None:
+                edge_ids.append(eid)
+                mask.append(True)
+            else:
+                edge_ids.append(-1)  # Placeholder
+                mask.append(False)
+
+        edge_ids = torch.tensor(edge_ids, dtype=torch.long)
+        for key in G_dispro.edges[edge_type].data.keys():
+            original_feat = G_dispro.edges[edge_type].data[key]
+            default_val = torch.zeros(1, dtype=original_feat.dtype, device=original_feat.device)
+
+            new_feats = []
+            for i, found in enumerate(mask):
+                if found:
+                    new_feats.append(original_feat[edge_ids[i]].unsqueeze(0))
+                else:
+                    new_feats.append(default_val.unsqueeze(0))  # Default seed score = 0.0
+
+            g.edges[edge_type].data[key] = torch.cat(new_feats, dim=0)
         return g

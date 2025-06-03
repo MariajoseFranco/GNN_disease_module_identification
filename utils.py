@@ -208,24 +208,41 @@ def neg_train_test_split_gnn(g, etype, num_samples, test_size):
     """
     src_type, _, dst_type = g.to_canonical_etype(etype)
 
-    # Sample negative candidate edges
-    src_ids = torch.randint(0, g.num_nodes(src_type), (num_samples,))
-    dst_ids = torch.randint(0, g.num_nodes(dst_type), (num_samples,))
+    # Get existing edges as a set
+    existing_edges = set(zip(
+        g.edges(etype=etype)[0].tolist(),
+        g.edges(etype=etype)[1].tolist()
+    ))
 
-    # Ensure test_size < num_samples
-    assert test_size < num_samples, "test_size must be smaller than num_samples"
+    total_neg_samples = num_samples + test_size
+    neg_edges = set()
+    max_attempts = 100 * num_samples  # Higher to ensure we get enough
 
-    # Shuffle indices for splitting
-    indices = np.random.permutation(num_samples)
+    while len(neg_edges) < total_neg_samples and max_attempts > 0:
+        src_sample = torch.randint(0, g.num_nodes(src_type), (1,)).item()
+        dst_sample = torch.randint(0, g.num_nodes(dst_type), (1,)).item()
+        if (
+            src_sample, dst_sample
+        ) not in existing_edges and (src_sample, dst_sample) not in neg_edges:
+            neg_edges.add((src_sample, dst_sample))
+        max_attempts -= 1
 
-    # Train/Test split
-    test_indices = indices[:test_size]
-    train_indices = indices[test_size:]
+    if len(neg_edges) < total_neg_samples:
+        print(
+            f"Warning: Only {len(neg_edges)} negative samples generated"
+            "out of {total_neg_samples} requested."
+        )
 
-    test_neg_u = src_ids[test_indices]
-    test_neg_v = dst_ids[test_indices]
-    train_neg_u = src_ids[train_indices]
-    train_neg_v = dst_ids[train_indices]
+    neg_edges = list(neg_edges)
+    neg_edges = np.random.permutation(neg_edges)
+
+    test_edges = neg_edges[:test_size]
+    train_edges = neg_edges[test_size:]
+
+    test_neg_u = torch.tensor([e[0] for e in test_edges], dtype=torch.long)
+    test_neg_v = torch.tensor([e[1] for e in test_edges], dtype=torch.long)
+    train_neg_u = torch.tensor([e[0] for e in train_edges], dtype=torch.long)
+    train_neg_v = torch.tensor([e[1] for e in train_edges], dtype=torch.long)
 
     return train_neg_u, train_neg_v, test_neg_u, test_neg_v
 

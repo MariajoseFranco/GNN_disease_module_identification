@@ -48,8 +48,15 @@ class DotPredictor(nn.Module):
             src_type, _, dst_type = g.to_canonical_etype(etype)
             g.nodes[src_type].data['h'] = h_dict[src_type]
             g.nodes[dst_type].data['h'] = h_dict[dst_type]
+
+            # Compute dot product
             g.apply_edges(fn.u_dot_v('h', 'h', 'score'), etype=etype)
-            return g.edges[etype].data['score'].squeeze()
+            dot_score = g.edges[etype].data['score'].squeeze()
+
+            # Add seed score feature (optional: weighted combination)
+            seed_score = g.edges[etype].data['seed_score'].squeeze()
+            g.edges[etype].data['score'] = dot_score + seed_score
+            return g.edges[etype].data['score']
 
     def forward_subg(self, g, h, u, v):
         """
