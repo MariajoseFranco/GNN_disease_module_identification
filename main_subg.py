@@ -1,4 +1,5 @@
 import itertools
+import os
 import warnings
 
 import numpy as np
@@ -15,6 +16,8 @@ from utils import neg_train_test_split_subg as neg_train_test_split
 from utils import pos_train_test_split
 
 warnings.filterwarnings("ignore")
+
+os.environ['NLTK_DATA'] = '/gnn_mariajose/nltk_data'
 
 
 class Main():
@@ -154,7 +157,7 @@ class Main():
         """
         diseases = self.DC.get_diseases()
         df_pro_pro, df_gen_pro, df_dis_gen, df_dis_pro, self.selected_diseases = self.DC.main(
-            diseases
+            diseases, self.output_path
         )
         G_ppi = self.GPPI.create_homogeneous_graph(df_pro_pro)
         disease_pro_mapping = mapping_diseases_to_proteins(df_dis_pro)

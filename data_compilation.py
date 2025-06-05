@@ -68,8 +68,8 @@ class DataCompilation():
                     matches.append((i, j))
         indexes = [j for _, j in matches]
         indexes.sort()
-        unique_diseases = unique_diseases.iloc[indexes]
-        diseases_matched = unique_diseases['disease_name'].to_list()
+        unique_diseases_matched = unique_diseases.iloc[indexes]
+        diseases_matched = unique_diseases_matched['disease_name'].to_list()
         return diseases_matched
 
     def get_dis_pro_data(self, df_dis_gen, df_gen_pro, selected_diseases, output_path):
