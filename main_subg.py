@@ -25,7 +25,7 @@ class Main():
         # Paths
         self.config = load_config()
         self.data_path = self.config['data_dir']
-        self.disease_path = self.config['disease_txt']
+        self.disease_path = self.config['disease_dir']
         self.output_path = self.config['results_dir']
 
         self.DC = DataCompilation(self.data_path, self.disease_path)
@@ -155,9 +155,9 @@ class Main():
         Returns:
             None
         """
-        diseases = self.DC.get_diseases()
-        df_pro_pro, df_gen_pro, df_dis_gen, df_dis_pro, self.selected_diseases = self.DC.main(
-            diseases, self.output_path
+        df_pro_pro, df_gen_pro, df_dis_gen, df_dis_pro = self.DC.main()
+        df_dis_pro, self.selected_diseases = self.DC.get_matched_diseases(
+            df_dis_pro, self.output_path
         )
         G_ppi = self.GPPI.create_homogeneous_graph(df_pro_pro)
         disease_pro_mapping = mapping_diseases_to_proteins(df_dis_pro)
