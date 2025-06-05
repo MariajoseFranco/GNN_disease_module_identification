@@ -24,7 +24,7 @@ class Main():
         # Paths
         self.config = load_config()
         self.data_path = self.config['data_dir']
-        self.disease_path = self.config['disease_txt']
+        self.disease_path = self.config['disease_dir']
         self.output_path = self.config['results_dir']
 
         self.DC = DataCompilation(self.data_path, self.disease_path)
@@ -208,9 +208,9 @@ class Main():
         Returns:
             None
         """
-        diseases = self.DC.get_diseases()
-        df_pro_pro, df_gen_pro, df_dis_gen, df_dis_pro, self.selected_diseases = self.DC.main(
-            diseases, self.output_path
+        df_pro_pro, df_gen_pro, df_dis_gen, df_dis_pro = self.DC.main()
+        df_dis_pro, self.selected_diseases = self.DC.get_matched_diseases(
+            df_dis_pro, self.output_path
         )
         seed_edge_scores = {(row['disease_id'], row['protein_id_enc']): row['score']
                             for idx, row in df_dis_pro.iterrows()}
@@ -230,7 +230,9 @@ class Main():
                 seed_score_tensor[i] = seed_edge_scores[(src, dst)]
 
         G_dispro.edges[edge_type].data['seed_score'] = seed_score_tensor
-        visualize_disease_protein_associations(G_dispro, diseases=[0, 1, 2], max_edges=100)
+        visualize_disease_protein_associations(
+            G_dispro, diseases=list(disease_index_to_node.keys()), max_edges=500
+        )
 
         # Define test - train size sets
         eids = np.arange(G_dispro.num_edges(etype=edge_type))

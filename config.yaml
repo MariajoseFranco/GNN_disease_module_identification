@@ -6,4 +6,4 @@ inputs_dir: "./inputs"
 results_dir: "./outputs"
 
 # Specific files
-disease_txt: "./inputs/diseases.txt"
+disease_dir: "./inputs/diseases_cui.csv"
