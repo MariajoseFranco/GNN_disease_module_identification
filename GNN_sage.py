@@ -4,12 +4,13 @@ import torch.nn.functional as F
 
 
 class GNN(nn.Module):
-    def __init__(self, in_feats, hidden_feats):
+    def __init__(self, features, hidden_feats):
         super(GNN, self).__init__()
-        self.conv1 = dglnn.SAGEConv(in_feats, hidden_feats, aggregator_type='mean')
-        self.conv2 = dglnn.SAGEConv(hidden_feats, hidden_feats, aggregator_type='mean')
+        self.layer1 = dglnn.SAGEConv(features, hidden_feats, aggregator_type='mean')
+        self.layer2 = dglnn.SAGEConv(hidden_feats, hidden_feats, aggregator_type='mean')
+        self.classifier = nn.Linear(hidden_feats, 2)  # <-- binary classification
 
-    def forward(self, g, in_feat):
+    def forward(self, g, features):
         """
         Forward pass of the GNN model using GraphSAGE convolution layers.
 
@@ -24,7 +25,7 @@ class GNN(nn.Module):
         Returns:
             torch.Tensor: Updated node features of shape (num_nodes, hidden_features).
         """
-        h = self.conv1(g, in_feat)
+        h = self.layer1(g, features)
         h = F.relu(h)
-        h = self.conv2(g, h)
-        return h
+        h = self.layer2(g, h)
+        return self.classifier(h)
