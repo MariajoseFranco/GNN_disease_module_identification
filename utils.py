@@ -1,16 +1,10 @@
-import re
-
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 import pandas as pd
-import scipy.sparse as sp
 import torch
 import yaml
 from matplotlib.patches import Patch
-from nltk.corpus import stopwords
-from nltk.stem import WordNetLemmatizer
-from nltk.tokenize import word_tokenize
 
 
 def load_config(config_path='config.yaml'):
@@ -27,32 +21,6 @@ def load_config(config_path='config.yaml'):
         return yaml.safe_load(f)
 
 
-def process_text(text):
-    """
-    Preprocess a text string by tokenizing, lowercasing, removing stopwords, and lemmatizing.
-
-    Args:
-        text (str): Input text string.
-
-    Returns:
-        list: A list of cleaned and lemmatized tokens from the input text.
-    """
-    stop_words = set(stopwords.words('english'))
-    lemmatizer = WordNetLemmatizer()
-
-    tokens = word_tokenize(text)
-
-    cleaned_tokens = []
-    for token in tokens:
-        parts = re.split(r'[^a-zA-Z0-9]+', token)
-        for part in parts:
-            if part:  # Skip empty strings
-                cleaned_tokens.append(part.lower())
-    filtered_tokens = [token for token in cleaned_tokens if token not in stop_words]
-    lemmatized_tokens = [lemmatizer.lemmatize(token) for token in filtered_tokens]
-    return lemmatized_tokens
-
-
 # Mapping Functions
 
 def mapping_diseases_to_proteins(df_dis_pro: pd.DataFrame) -> dict:
@@ -65,7 +33,10 @@ def mapping_diseases_to_proteins(df_dis_pro: pd.DataFrame) -> dict:
     Returns:
         dict: Dictionary mapping disease names to sets of associated proteins.
     """
-    disease_pro_mapping = df_dis_pro.groupby("disease_name")["protein_id"].apply(set).to_dict()
+    disease_pro_mapping = {
+        disease: dict(zip(group['protein_id'], group['score']))
+        for disease, group in df_dis_pro.groupby("disease_name")
+    }
     return disease_pro_mapping
 
 
@@ -244,33 +215,4 @@ def neg_train_test_split_gnn(g, etype, num_samples, test_size):
     train_neg_u = torch.tensor([e[0] for e in train_edges], dtype=torch.long)
     train_neg_v = torch.tensor([e[1] for e in train_edges], dtype=torch.long)
 
-    return train_neg_u, train_neg_v, test_neg_u, test_neg_v
-
-
-def neg_train_test_split_subg(u, v, g, test_size):
-    """
-    Generate and split negative samples for a homogeneous graph using adjacency matrices.
-
-    Args:
-        u (Tensor): Source node indices of positive edges.
-        v (Tensor): Target node indices of positive edges.
-        g (dgl.DGLGraph): The homogeneous graph.
-        test_size (int): Number of negative edges to include in the test set.
-
-    Returns:
-        tuple: (train_neg_u, train_neg_v, test_neg_u, test_neg_v)
-    """
-    adj = sp.coo_matrix((np.ones(len(u)), (u.numpy(), v.numpy())))
-    adj_neg = 1 - adj.todense() - np.eye(g.num_nodes())
-    neg_u, neg_v = np.where(adj_neg != 0)
-
-    neg_eids = np.random.choice(len(neg_u), g.num_edges())
-    test_neg_u, test_neg_v = (
-        neg_u[neg_eids[:test_size]],
-        neg_v[neg_eids[:test_size]],
-    )
-    train_neg_u, train_neg_v = (
-        neg_u[neg_eids[test_size:]],
-        neg_v[neg_eids[test_size:]],
-    )
     return train_neg_u, train_neg_v, test_neg_u, test_neg_v
