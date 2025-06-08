@@ -1,10 +1,9 @@
-import itertools
 import os
 import warnings
 
-import numpy as np
 import pandas as pd
 import torch
+from sklearn.metrics import f1_score, precision_score, recall_score
 from torch import nn
 
 from data_compilation import DataCompilation
@@ -12,12 +11,8 @@ from dot_predictor import DotPredictor
 from GNN_sage import GNN
 from graph_creation import GraphPPI
 from utils import load_config, mapping_diseases_to_proteins
-from utils import neg_train_test_split_subg as neg_train_test_split
-from utils import pos_train_test_split
 
 warnings.filterwarnings("ignore")
-
-os.environ['NLTK_DATA'] = '/gnn_mariajose/nltk_data'
 
 
 class Main():
@@ -32,20 +27,9 @@ class Main():
         self.GPPI = GraphPPI()
         self.predictor = DotPredictor()
         self.epochs = 100
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    def training_loop(
-            self,
-            model,
-            predictor,
-            train_pos_u,
-            train_pos_v,
-            train_neg_u,
-            train_neg_v,
-            g,
-            features,
-            optimizer,
-            loss_fn
-    ):
+    def training_loop(self, model, g, labels, train_idx, val_idx, optimizer, loss_fn):
         """
         Trains the GNN model for link prediction using positive and negative edges.
 
@@ -64,28 +48,30 @@ class Main():
         Returns:
             None: Trains the model in-place.
         """
+        model.train()
+
+        g = g.to(self.device)
+        features = g.ndata['feat'].to(self.device)
+        labels = labels.to(self.device)
+        train_idx = train_idx.to(self.device)
+        val_idx = val_idx.to(self.device)
+
         for epoch in range(self.epochs):
-            model.train()
-
-            h = model(g, features)
-
-            u_train = torch.cat([train_pos_u, train_neg_u])
-            v_train = torch.cat([train_pos_v, train_neg_v])
-            labels = torch.cat([torch.ones(len(train_pos_u)), torch.zeros(len(train_neg_u))])
-
-            logits = predictor(g, h, u=u_train, v=v_train)
-            loss = loss_fn(logits, labels)
+            logits = model(g, features)
+            loss = loss_fn(logits[train_idx], labels[train_idx])
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
             if epoch % 5 == 0:
-                print("In epoch {}, loss: {}".format(epoch, loss))
+                acc, f1, prec, rec, _ = self.evaluating_model(model, g, labels, val_idx)
+                print(
+                    f"Epoch {epoch}, Loss {loss.item():.4f}"
+                    f", Val Acc {acc:.4f}, Val F1 {f1:.4f}"
+                    f", Val Prec {prec:.4f}, Val Rec {rec:.4f}")
 
-    def evaluating_model(
-            self, model, predictor, test_pos_u, test_pos_v, test_neg_u, test_neg_v, g, features
-    ):
+    def evaluating_model(self, model, g, labels, test_idx):
         """
         Evaluates the trained model on test edges and computes accuracy.
 
@@ -107,18 +93,20 @@ class Main():
         """
         model.eval()
         with torch.no_grad():
-            h = model(g, features)
-            u_test = torch.cat([test_pos_u, test_neg_u])
-            v_test = torch.cat([test_pos_v, test_neg_v])
-            test_labels = torch.cat([torch.ones(len(test_pos_u)), torch.zeros(len(test_neg_u))])
-            test_logits = predictor(g, h, u=u_test, v=v_test)
+            g = g.to(self.device)
+            features = g.ndata['feat'].to(self.device)
+            labels = labels.to(self.device)
+            test_idx = test_idx.to(self.device)
 
-            preds = (torch.sigmoid(test_logits) > 0.5).float()
-            acc = (preds == test_labels).float().mean().item()
-            print(f"\nTest Accuracy: {acc:.4f}")
-            return preds, u_test, v_test
+            logits = model(g, features)
+            preds = logits[test_idx].argmax(dim=1).to(self.device)
+            acc = (preds == labels[test_idx]).float().mean().item()
+            f1 = f1_score(labels[test_idx], preds, average='binary', zero_division=0)
+            precision = precision_score(labels[test_idx], preds, zero_division=0)
+            recall = recall_score(labels[test_idx], preds, zero_division=0)
+            return acc, f1, precision, recall, preds
 
-    def obtaining_ppi_predicted(self, node_index, preds, u_test, v_test):
+    def obtaining_predicted_proteins(self, node_index, preds, val_idx, seed_nodes):
         """
         Converts predicted test edges (indices) into protein-protein pairs.
 
@@ -131,16 +119,20 @@ class Main():
         Returns:
             list: List of predicted protein-protein interaction pairs (tuples).
         """
-        index_node = {i: n for n, i in node_index.items()}
-        pred_positive_indices = (preds == 1).nonzero(as_tuple=True)[0]
-        predicted_ppis = []
-        for i in pred_positive_indices:
-            u_idx = u_test[i].item()
-            v_idx = v_test[i].item()
-            protein_u = index_node.get(u_idx, u_idx)
-            protein_v = index_node.get(v_idx, v_idx)
-            predicted_ppis.append((protein_u, protein_v))
-        return predicted_ppis
+        index_node = {v: k for k, v in node_index.items()}
+
+        # Get indices of predicted positives (label 1) among validation nodes
+        predicted_positive_mask = preds == 1  # preds is of length len(val_idx)
+        positive_indices = val_idx[predicted_positive_mask]
+
+        # Get corresponding protein names
+        predicted_positive_proteins = [index_node[int(idx)] for idx in positive_indices]
+        df_predicted = pd.DataFrame(predicted_positive_proteins, columns=['Predicted Proteins'])
+        df_predicted['is_seed'] = False
+        for seed in seed_nodes:
+            if seed in predicted_positive_proteins:
+                df_predicted.loc[df_predicted['Predicted Proteins'] == seed, 'is_seed'] = True
+        return df_predicted
 
     def main(self):
         """
@@ -161,78 +153,54 @@ class Main():
         )
         G_ppi = self.GPPI.create_homogeneous_graph(df_pro_pro)
         disease_pro_mapping = mapping_diseases_to_proteins(df_dis_pro)
-        node_list = list(G_ppi.nodes())
-        node_index = {node: i for i, node in enumerate(node_list)}
+        node_index = {node: i for i, node in enumerate(list(G_ppi.nodes()))}
         for disease in self.selected_diseases:
             print('\nDisease of interest: ', disease)
-            seed_nodes = disease_pro_mapping[disease]
-            real_ppi_u = df_pro_pro[df_pro_pro['prA'].isin(seed_nodes)]
-            real_ppi_v = df_pro_pro[df_pro_pro['prB'].isin(seed_nodes)]
-            real_ppi = pd.concat([real_ppi_u, real_ppi_v])
-            real_ppi.drop_duplicates()
-            g = self.GPPI.convert_networkx_to_dgl_graph(G_ppi, seed_nodes)
-            features = g.ndata['feat']
-            u, v = g.edges()
-
-            # Define test - train size sets
-            eids = np.arange(g.num_edges())
-            eids = np.random.permutation(eids)
-            test_size = int(len(eids) * 0.2)
-
-            # Positive edges (real)
-            train_pos_u, train_pos_v, test_pos_u, test_pos_v = pos_train_test_split(
-                u, v, eids, test_size
-            )
-
-            # Negative edges
-            train_neg_u, train_neg_v, test_neg_u, test_neg_v = neg_train_test_split(
-                u, v, g, test_size
+            node_scoring = disease_pro_mapping[disease]
+            seed_nodes = {key for key, _ in node_scoring.items()}
+            g, labels, train_idx, val_idx, test_idx = self.GPPI.convert_networkx_to_dgl_graph(
+                G_ppi, seed_nodes, node_scoring, node_index
             )
 
             # Prepare model and optimizer
-            model = GNN(in_feats=features.shape[1], hidden_feats=64)
-            optimizer = torch.optim.Adam(
-                itertools.chain(model.parameters(), self.predictor.parameters()), lr=0.01
-            )
-            loss_fn = nn.BCEWithLogitsLoss()
+            model = GNN(features=g.ndata['feat'].shape[1], hidden_feats=64).to(self.device)
+            optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
 
-            # Convert edge sets to tensors
-            train_pos_u, train_pos_v, test_pos_u, test_pos_v = self.GPPI.convert_to_tensors(
-                train_pos_u, train_pos_v, test_pos_u, test_pos_v
-            )
-            train_neg_u, train_neg_v, test_neg_u, test_neg_v = self.GPPI.convert_to_tensors(
-                train_neg_u, train_neg_v, test_neg_u, test_neg_v
-            )
+            # Compute class counts
+            num_0 = (labels[train_idx] == 0).sum().item()
+            num_1 = (labels[train_idx] == 1).sum().item()
+            # Create class weights: higher for underrepresented class 1
+            weights = torch.tensor([1.0, num_0 / num_1], dtype=torch.float32)
+            loss_fn = nn.CrossEntropyLoss(weight=weights.to(self.device))
 
             # Training loop
-            self.training_loop(
-                model,
-                self.predictor,
-                train_pos_u,
-                train_pos_v,
-                train_neg_u,
-                train_neg_v,
-                g,
-                features,
-                optimizer,
-                loss_fn
-            )
+            self.training_loop(model, g, labels, train_idx, val_idx, optimizer, loss_fn)
 
             # Evaluation
-            preds, u_test, v_test = self.evaluating_model(
-                model, self.predictor, test_pos_u, test_pos_v, test_neg_u, test_neg_v, g, features
+            test_acc, test_f1, test_prec, test_rec, preds = self.evaluating_model(
+                model, g, labels, test_idx
             )
-            predicted_ppis = self.obtaining_ppi_predicted(
-                node_index, preds, u_test, v_test
+            print(f"\nTest Accuracy: {test_acc:.4f}")
+            print(f"Test F1: {test_f1:.4f}")
+            print(f"Test Precision: {test_prec:.4f}")
+            print(f"Test Recall: {test_rec:.4f}")
+            counts = torch.bincount(preds)
+            print(f"\nTest predictions breakdown: Predicted {counts[0]} as 0 "
+                  f"(no seed nodes) and {counts[1]} as 1 (seed nodes)")
+            predicted_proteins = self.obtaining_predicted_proteins(
+                node_index, preds, val_idx, seed_nodes
             )
 
             # Save predicted PPIs to a .txt file
-            with open(f"{self.output_path}/predicted_ppis_{disease}.txt", "w") as f:
-                for u, v in predicted_ppis:
-                    f.write(f"{u}\t{v}\n")
+            os.makedirs(f'{self.output_path}/{disease}', exist_ok=True)
+            predicted_proteins.to_csv(
+                f"{self.output_path}/{disease}/predicted_proteins.txt", sep="\t", index=False
+            )
 
             # Save real PPIs to a .txt file
-            real_ppi.to_csv(f"{self.output_path}/real_ppis_{disease}.txt", sep="\t", index=False)
+            with open(f"{self.output_path}/{disease}/real_seeds_proteins.txt", "w") as f:
+                for seed in seed_nodes:
+                    f.write(f"{seed}\n")
 
 
 if __name__ == "__main__":
