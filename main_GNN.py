@@ -12,9 +12,9 @@ from data_compilation import DataCompilation
 from dot_predictor import DotPredictor
 from graph_creation import GraphPPI
 from heteroGNN import HeteroGNN as GNN
-from utils import load_config, mapping_index_to_node
-from utils import neg_train_test_split_gnn as neg_train_test_split
-from utils import pos_train_test_split, visualize_disease_protein_associations
+from utils import (load_config, mapping_index_to_node, neg_train_test_split,
+                   pos_train_test_split,
+                   visualize_disease_protein_associations)
 
 warnings.filterwarnings("ignore")
 
@@ -37,6 +37,8 @@ class Main():
             train_pos_g,
             train_neg_g,
             train_g,
+            val_pos_g,
+            val_neg_g,
             features,
             optimizer,
             pred,
@@ -58,11 +60,13 @@ class Main():
         Returns:
             dict: Node embeddings after training.
         """
+        best_auc = 0
+        best_state = None
         for epoch in range(self.epochs):
             # forward
             h = model(train_g, features)
-            pos_score = pred(train_pos_g, h, etype=edge_type)
-            neg_score = pred(train_neg_g, h, etype=edge_type)
+            pos_score = pred(train_pos_g, h, etype=edge_type, use_seed_score=True)
+            neg_score = pred(train_neg_g, h, etype=edge_type, use_seed_score=True)
             loss = self.compute_loss(pos_score, neg_score)
 
             # backward
@@ -71,7 +75,16 @@ class Main():
             optimizer.step()
 
             if epoch % 5 == 0:
-                print("In epoch {}, loss: {}".format(epoch, loss))
+                val_auc, _ = self.compute_auc(
+                    pred(val_pos_g, h, etype=edge_type),
+                    pred(val_neg_g, h, etype=edge_type)
+                )
+                print(f"Epoch {epoch}, Loss: {loss:.4f}, Val AUC: {val_auc:.4f}")
+
+                if val_auc > best_auc:
+                    best_auc = val_auc
+                    best_state = model.state_dict()
+        model.load_state_dict(best_state)  # Restore best model
         return h
 
     def evaluating_model(self, test_pos_g, test_neg_g, pred, h, edge_type):
@@ -92,10 +105,10 @@ class Main():
                 - labels (ndarray): Ground truth labels (1 for positive, 0 for negative).
         """
         with torch.no_grad():
-            pos_score = pred(test_pos_g, h, etype=edge_type)
-            neg_score = pred(test_neg_g, h, etype=edge_type)
+            pos_score = pred(test_pos_g, h, etype=edge_type, use_seed_score=False)
+            neg_score = pred(test_neg_g, h, etype=edge_type, use_seed_score=False)
             auc, labels = self.compute_auc(pos_score, neg_score)
-            print("AUC", auc)
+            print(f"Test AUC: {auc:.4f}")
             return pos_score, neg_score, labels
 
     def compute_loss(self, pos_score, neg_score):
@@ -128,10 +141,10 @@ class Main():
                 - auc (float): The computed AUC score.
                 - labels (ndarray): Ground truth labels for the test edges.
         """
-        scores = torch.cat([pos_score, neg_score]).numpy()
+        scores = torch.cat([pos_score, neg_score]).detach().cpu().numpy()
         labels = torch.cat(
             [torch.ones(pos_score.shape[0]), torch.zeros(neg_score.shape[0])]
-        ).numpy()
+        ).cpu().numpy()
         return roc_auc_score(labels, scores), labels
 
     def obtaining_dis_pro_predicted(
@@ -221,6 +234,9 @@ class Main():
         )
         edge_type = ('disease', 'associates', 'protein')
         u, v = G_dispro.edges(etype=edge_type)
+        # Get all edges of the reverse type
+        rev_edge_type = ('protein', 'rev_associates', 'disease')
+        rev_u, rev_v = G_dispro.edges(etype=rev_edge_type)
 
         num_edges = G_dispro.num_edges(etype=edge_type)
         seed_score_tensor = torch.zeros(num_edges, 1)
@@ -237,19 +253,44 @@ class Main():
         # Define test - train size sets
         eids = np.arange(G_dispro.num_edges(etype=edge_type))
         eids = np.random.permutation(eids)
-        test_size = int(len(eids) * 0.2)
+
+        train_size = int(0.7 * len(eids))
+        test_size = int(0.15 * len(eids))
+        val_size = int(0.15 * len(eids))
 
         # Positive edges (real)
-        train_pos_u, train_pos_v, test_pos_u, test_pos_v = pos_train_test_split(
-            u, v, eids, test_size
+        train_pos_u, train_pos_v, val_pos_u, val_pos_v, test_pos_u, test_pos_v, val_eids, test_eids = (
+            pos_train_test_split(u, v, eids, train_size, val_size, test_size)
         )
 
         # Negative edges
-        train_neg_u, train_neg_v, test_neg_u, test_neg_v = neg_train_test_split(
-            G_dispro, edge_type, num_samples=len(train_pos_u), test_size=test_size
+        train_neg_u, train_neg_v, val_neg_u, val_neg_v, test_neg_u, test_neg_v = (
+            neg_train_test_split(G_dispro, edge_type, train_size, val_size, test_size)
         )
 
-        train_g = dgl.remove_edges(G_dispro, eids[:test_size], etype=edge_type)
+        # Identify indices of reverse edges that match
+        val_pairs_set = set(zip(val_pos_v.tolist(), val_pos_u.tolist()))
+        test_pairs_set = set(zip(test_pos_v.tolist(), test_pos_u.tolist()))
+
+        # Build mask for reverse edge indices to remove
+        rev_val_eids_to_remove = [
+            i for i, (src, dst) in enumerate(zip(rev_u.tolist(), rev_v.tolist()))
+            if (src, dst) in val_pairs_set
+        ]
+        rev_test_eids_to_remove = [
+            i for i, (src, dst) in enumerate(zip(rev_u.tolist(), rev_v.tolist()))
+            if (src, dst) in test_pairs_set
+        ]
+        rev_eids_to_remove = np.concatenate(
+            [rev_val_eids_to_remove, rev_test_eids_to_remove]
+        )
+
+        # Remove test edges from both directions
+        G_tmp = dgl.remove_edges(G_dispro, np.concatenate([val_eids, test_eids]), etype=edge_type)
+        if len(rev_eids_to_remove) > 0:
+            train_g = dgl.remove_edges(G_tmp, rev_eids_to_remove, etype=rev_edge_type)
+        else:
+            train_g = G_tmp
         feat_dim = 64
         G_dispro.nodes['disease'].data['feat'] = torch.randn(
             G_dispro.num_nodes('disease'), feat_dim
@@ -267,6 +308,12 @@ class Main():
         )
         train_neg_g = self.GPPI.convert_to_heterogeneous_graph(
             G_dispro, edge_type, train_neg_u, train_neg_v
+        )
+        val_pos_g = self.GPPI.convert_to_heterogeneous_graph(
+            G_dispro, edge_type, val_pos_u, val_pos_v
+        )
+        val_neg_g = self.GPPI.convert_to_heterogeneous_graph(
+            G_dispro, edge_type, val_neg_u, val_neg_v
         )
         test_pos_g = self.GPPI.convert_to_heterogeneous_graph(
             G_dispro, edge_type, test_pos_u, test_pos_v
@@ -289,6 +336,8 @@ class Main():
             train_pos_g,
             train_neg_g,
             train_g,
+            val_pos_g,
+            val_neg_g,
             features,
             optimizer,
             pred,

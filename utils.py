@@ -146,7 +146,7 @@ def visualize_disease_protein_associations(g, diseases, max_edges=200):
 
 # Train/Test Split Functions
 
-def pos_train_test_split(u, v, eids, test_size):
+def pos_train_test_split(u, v, eids, train_size, val_size, test_size):
     """
     Split positive edges into training and test sets for link prediction.
 
@@ -159,12 +159,17 @@ def pos_train_test_split(u, v, eids, test_size):
     Returns:
         tuple: (train_pos_u, train_pos_v, test_pos_u, test_pos_v)
     """
-    test_pos_u, test_pos_v = u[eids[:test_size]], v[eids[:test_size]]
-    train_pos_u, train_pos_v = u[eids[test_size:]], v[eids[test_size:]]
-    return train_pos_u, train_pos_v, test_pos_u, test_pos_v
+    train_eids = eids[:train_size]
+    val_eids = eids[train_size:train_size + val_size]
+    test_eids = eids[train_size + val_size:]
+
+    train_pos_u, train_pos_v = u[train_eids], v[train_eids]
+    val_pos_u, val_pos_v = u[val_eids], v[val_eids]
+    test_pos_u, test_pos_v = u[test_eids], v[test_eids]
+    return train_pos_u, train_pos_v, val_pos_u, val_pos_v, test_pos_u, test_pos_v, val_eids, test_eids
 
 
-def neg_train_test_split_gnn(g, etype, num_samples, test_size):
+def neg_train_test_split(g, etype, train_size, val_size, test_size):
     """
     Generate and split negative samples for a heterogeneous graph (DGL format).
 
@@ -185,34 +190,40 @@ def neg_train_test_split_gnn(g, etype, num_samples, test_size):
         g.edges(etype=etype)[1].tolist()
     ))
 
-    total_neg_samples = num_samples + test_size
+    total_neg_samples = train_size + val_size + test_size
     neg_edges = set()
-    max_attempts = 100 * num_samples  # Higher to ensure we get enough
+    attempts = 0
+    max_attempts = 100 * total_neg_samples
 
-    while len(neg_edges) < total_neg_samples and max_attempts > 0:
-        src_sample = torch.randint(0, g.num_nodes(src_type), (1,)).item()
-        dst_sample = torch.randint(0, g.num_nodes(dst_type), (1,)).item()
-        if (
-            src_sample, dst_sample
-        ) not in existing_edges and (src_sample, dst_sample) not in neg_edges:
-            neg_edges.add((src_sample, dst_sample))
-        max_attempts -= 1
+    while len(neg_edges) < total_neg_samples and attempts < max_attempts:
+        src = torch.randint(0, g.num_nodes(src_type), (1,)).item()
+        dst = torch.randint(0, g.num_nodes(dst_type), (1,)).item()
+        if (src, dst) not in existing_edges and (src, dst) not in neg_edges:
+            neg_edges.add((src, dst))
+        attempts += 1
 
     if len(neg_edges) < total_neg_samples:
         print(
             f"Warning: Only {len(neg_edges)} negative samples generated"
-            "out of {total_neg_samples} requested."
+            f"out of {total_neg_samples} requested."
         )
 
     neg_edges = list(neg_edges)
     neg_edges = np.random.permutation(neg_edges)
 
-    test_edges = neg_edges[:test_size]
-    train_edges = neg_edges[test_size:]
+    # Split
+    train_edges = neg_edges[:train_size]
+    val_edges = neg_edges[train_size:train_size + val_size]
+    test_edges = neg_edges[train_size + val_size:]
 
-    test_neg_u = torch.tensor([e[0] for e in test_edges], dtype=torch.long)
-    test_neg_v = torch.tensor([e[1] for e in test_edges], dtype=torch.long)
-    train_neg_u = torch.tensor([e[0] for e in train_edges], dtype=torch.long)
-    train_neg_v = torch.tensor([e[1] for e in train_edges], dtype=torch.long)
+    train_neg_u, train_neg_v = edge_list_to_tensor(train_edges)
+    val_neg_u, val_neg_v = edge_list_to_tensor(val_edges)
+    test_neg_u, test_neg_v = edge_list_to_tensor(test_edges)
 
-    return train_neg_u, train_neg_v, test_neg_u, test_neg_v
+    return train_neg_u, train_neg_v, val_neg_u, val_neg_v, test_neg_u, test_neg_v
+
+
+def edge_list_to_tensor(edge_list):
+    u = torch.tensor([e[0] for e in edge_list], dtype=torch.long)
+    v = torch.tensor([e[1] for e in edge_list], dtype=torch.long)
+    return u, v
