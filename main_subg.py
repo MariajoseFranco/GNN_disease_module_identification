@@ -188,7 +188,7 @@ class Main():
             print(f"\nTest predictions breakdown: Predicted {counts[0]} as 0 "
                   f"(no seed nodes) and {counts[1]} as 1 (seed nodes)")
             predicted_proteins = self.obtaining_predicted_proteins(
-                node_index, preds, val_idx, seed_nodes
+                node_index, preds, test_idx, seed_nodes
             )
 
             # Save predicted PPIs to a .txt file
