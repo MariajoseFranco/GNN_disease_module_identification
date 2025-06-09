@@ -360,7 +360,11 @@ class Main():
             disease_index_to_node, protein_index_to_node, seed_nodes
         )
         # Save predicted DISEASE-PROTEIN associations to a .txt file
-        predicted_dis_pro.to_csv(f"{self.output_path}/predicted_dis_pro.txt", sep="\t", index=False)
+        predicted_dis_pro.to_csv(
+            f"{self.output_path}/Link Prediction Task/predicted_dis_pro.txt",
+            sep="\t",
+            index=False
+        )
 
 
 if __name__ == "__main__":

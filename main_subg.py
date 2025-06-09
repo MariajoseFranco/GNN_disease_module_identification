@@ -192,13 +192,16 @@ class Main():
             )
 
             # Save predicted PPIs to a .txt file
-            os.makedirs(f'{self.output_path}/{disease}', exist_ok=True)
+            os.makedirs(f'{self.output_path}/Subg Classifcation Task/{disease}', exist_ok=True)
             predicted_proteins.to_csv(
-                f"{self.output_path}/{disease}/predicted_proteins.txt", sep="\t", index=False
+                f"{self.output_path}/Subg Classifcation Task/{disease}"
+                f"/predicted_proteins.txt", sep="\t", index=False
             )
 
             # Save real PPIs to a .txt file
-            with open(f"{self.output_path}/{disease}/real_seeds_proteins.txt", "w") as f:
+            with open(
+                f"{self.output_path}/Subg Classifcation Task/{disease}/real_seeds_proteins.txt", "w"
+            ) as f:
                 for seed in seed_nodes:
                     f.write(f"{seed}\n")
 
