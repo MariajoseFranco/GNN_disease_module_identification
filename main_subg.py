@@ -23,7 +23,7 @@ class Main():
         self.disease_path = self.config['disease_dir']
         self.output_path = self.config['results_dir']
 
-        self.DC = DataCompilation(self.data_path, self.disease_path)
+        self.DC = DataCompilation(self.data_path, self.disease_path, self.output_path)
         self.GPPI = GraphPPI()
         self.predictor = DotPredictor()
         self.epochs = 100
@@ -147,10 +147,7 @@ class Main():
         Returns:
             None
         """
-        df_pro_pro, df_gen_pro, df_dis_gen, df_dis_pro = self.DC.main()
-        df_dis_pro, self.selected_diseases = self.DC.get_matched_diseases(
-            df_dis_pro, self.output_path
-        )
+        df_pro_pro, df_gen_pro, df_dis_gen, df_dis_pro, self.selected_diseases = self.DC.main()
         G_ppi = self.GPPI.create_homogeneous_graph(df_pro_pro)
         disease_pro_mapping = mapping_diseases_to_proteins(df_dis_pro)
         node_index = {node: i for i, node in enumerate(list(G_ppi.nodes()))}
@@ -185,7 +182,10 @@ class Main():
             print(f"Test Precision: {test_prec:.4f}")
             print(f"Test Recall: {test_rec:.4f}")
             counts = torch.bincount(preds)
-            print(f"\nTest predictions breakdown: Predicted {counts[0]} as 0 "
+            if len(counts) == 1:
+                counts = torch.cat((counts, torch.tensor([0])))
+            print('\nTest set size: ', len(test_idx))
+            print(f"Test predictions breakdown: Predicted {counts[0]} as 0 "
                   f"(no seed nodes) and {counts[1]} as 1 (seed nodes)")
             predicted_proteins = self.obtaining_predicted_proteins(
                 node_index, preds, test_idx, seed_nodes
