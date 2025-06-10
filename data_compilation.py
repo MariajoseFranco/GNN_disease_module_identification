@@ -1,13 +1,16 @@
+from typing import Union
+
 import pandas as pd
 from sklearn.preprocessing import LabelEncoder
 
 
 class DataCompilation():
-    def __init__(self, data_path, disease_path) -> None:
+    def __init__(self, data_path, disease_path, output_path) -> None:
         self.data_path = data_path
         self.disease_path = disease_path
+        self.output_path = output_path
 
-    def get_matched_diseases(self, df_dis_pro, output_path):
+    def get_matched_diseases(self, df_dis_pro):
         """
         Load and clean the disease names from a CSV file.
 
@@ -20,36 +23,66 @@ class DataCompilation():
         diseases = pd.read_csv(self.disease_path)
         cui_list = diseases['cui'].to_list()
         df_dis_pro_matched = df_dis_pro[df_dis_pro['cui'].isin(cui_list)]
-        df_dis_pro_matched['disease_name'].to_csv(
-            f'{output_path}/diseases_of_interest.csv', index=False
-        )
+        with open(
+            f"{self.output_path}/diseases_of_interest.csv", "w"
+        ) as f:
+            f.write("DISEASES OF INTEREST\n")
+            for disease in df_dis_pro_matched['disease_name'].unique():
+                f.write(f"{disease}\n")
         selected_diseases = df_dis_pro_matched['disease_name'].unique().tolist()
-        # BORRAR lo de abajo
-        # selected_diseases = selected_diseases[:3]
-        # df_dis_pro_matched = df_dis_pro_matched[df_dis_pro_matched['disease_name'].isin(
-        #     selected_diseases
-        # )]
         return df_dis_pro_matched, selected_diseases
 
-    def get_data(self):
-        """
-        Load interaction datasets from files:
-            - Protein-Protein Interactions (PPI)
-            - Gene-Protein Interactions
-            - Disease-Gene Interactions
-
-        The PPI dataset is filtered to remove self-loops (interactions where prA == prB).
+    def get_and_clean_pro_pro_data(self) -> pd.DataFrame:
+        """_summary_
 
         Returns:
-            tuple: DataFrames (df_pro_pro, df_gen_pro, df_dis_gen)
+            pd.DataFrame: _description_
         """
-        # Protein - Protein Interaction
-        df_pro_pro = pd.read_csv(f'{self.data_path}/pro_pro.tsv', sep='\t')
-        df_pro_pro = df_pro_pro[df_pro_pro['prA'] != df_pro_pro['prB']]
-        # Gen - Protein Interaction
+        df_ppi = pd.read_csv(f'{self.data_path}/pro_pro.tsv', sep='\t')
+
+        df_ppi = df_ppi[df_ppi['prA'] != df_ppi['prB']]
+        df_ppi = df_ppi.drop_duplicates()
+        df_ppi['pair'] = df_ppi.apply(lambda row: tuple(sorted([row['prA'], row['prB']])), axis=1)
+        df_pro_pro = (
+            df_ppi
+            .drop_duplicates(subset='pair')
+            .drop(columns='pair').reset_index(drop=True)
+        )
+        return df_pro_pro
+
+    def get_and_clean_gen_pro_data(self) -> pd.DataFrame:
+        """_summary_
+
+        Returns:
+            pd.DataFrame: _description_
+        """
         df_gen_pro = pd.read_csv(f'{self.data_path}/gen_pro.tsv', sep='\t')
-        # Disease - Gen Interaction
+        df_gen_pro = df_gen_pro.drop_duplicates()
+        return df_gen_pro
+
+    def get_and_clean_dis_gen_data(self) -> pd.DataFrame:
+        """_summary_
+
+        Returns:
+            pd.DataFrame: _description_
+        """
         df_dis_gen = pd.read_csv(f'{self.data_path}/dis_gen.tsv', sep='\t')
+        df_dis_gen = df_dis_gen.drop_duplicates(subset=['disease_name', 'gene_id', 'gene_symbol'])
+        return df_dis_gen
+
+    def get_data(self) -> Union[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """
+        Retrieve and clean the data from the specified paths.
+
+        Returns:
+            tuple:
+                - pd.DataFrame: Protein-Protein interaction data.
+                - pd.DataFrame: Gene-Protein interaction data.
+                - pd.DataFrame: Disease-Gene interaction data.
+        """
+        df_pro_pro = self.get_and_clean_pro_pro_data()
+        df_gen_pro = self.get_and_clean_gen_pro_data()
+        df_dis_gen = self.get_and_clean_dis_gen_data()
         return df_pro_pro, df_gen_pro, df_dis_gen
 
     def get_dis_pro_data(self, df_dis_gen, df_gen_pro):
@@ -73,7 +106,7 @@ class DataCompilation():
         )
         df_dis_pro = df_dis_pro[df_dis_pro['_merge'] == 'both'].drop(
             ['_merge'], axis=1
-        )
+        )  # se eliminan los genes que no codifican proteina (no salen en df_gen_pro)
         return df_dis_pro
 
     def encoding_diseases(self, df_dis_pro):
@@ -114,7 +147,29 @@ class DataCompilation():
         df_dis_pro['protein_id_enc'] = protein_encoder.transform(df_dis_pro['protein_id'])
         return df_pro_pro, df_dis_pro
 
-    def main(self):
+    def removing_duplicated_proteins(self, df_dis_pro, selected_diseases):
+        """
+        Remove duplicated
+
+        Args:
+            df_dis_pro (pd.DataFrame): DataFrame containing the disease-protein
+            associations.
+
+        Returns:
+            pd.DataFrame: DataFrame with duplicated interactions removed.
+        """
+        results = []
+        for disease in selected_diseases:
+            df_disease = df_dis_pro[df_dis_pro['disease_name'] == disease]
+            df_disease_without_duplicated_proteins = df_disease \
+                .sort_values('score', ascending=False) \
+                .drop_duplicates(subset='protein_id', keep='first') \
+                .reset_index(drop=True)
+            results.append(df_disease_without_duplicated_proteins)
+        df_dis_pro_without_duplicated_proteins = pd.concat(results, ignore_index=True)
+        return df_dis_pro_without_duplicated_proteins
+
+    def main(self) -> Union[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """
         Executes the data preparation pipeline:
             - Loads interaction data.
@@ -136,11 +191,15 @@ class DataCompilation():
                 - diseases_matched (list): List of matched disease names.
         """
         df_pro_pro, df_gen_pro, df_dis_gen = self.get_data()
-        df_dis_pro = self.get_dis_pro_data(
-            df_dis_gen, df_gen_pro
-        )
+        df_dis_pro = self.get_dis_pro_data(df_dis_gen, df_gen_pro)
         df_dis_pro_encoded = self.encoding_diseases(df_dis_pro)
         df_pro_pro_encoded, df_dis_pro_encoded = self.encoding_proteins(
             df_pro_pro, df_dis_pro_encoded
         )
-        return df_pro_pro_encoded, df_gen_pro, df_dis_gen, df_dis_pro_encoded
+        df_dis_pro_matched, selected_diseases = self.get_matched_diseases(
+            df_dis_pro_encoded
+        )
+        df_dis_pro_cleaned = self.removing_duplicated_proteins(
+            df_dis_pro_matched, selected_diseases
+        )
+        return df_pro_pro_encoded, df_gen_pro, df_dis_gen, df_dis_pro_cleaned, selected_diseases
