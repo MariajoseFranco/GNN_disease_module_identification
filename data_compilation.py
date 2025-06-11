@@ -149,7 +149,7 @@ class DataCompilation():
         cui_list = diseases['cui'].to_list()
         df_dis_pro_matched = df_dis_pro[df_dis_pro['cui'].isin(cui_list)]
         selected_diseases = df_dis_pro_matched['disease_name'].unique().tolist()
-        self.save_matched_diseases_to_csv()
+        self.save_matched_diseases_to_csv(df_dis_pro_matched)
         return df_dis_pro_matched, selected_diseases
 
     def save_matched_diseases_to_csv(self, df_dis_pro_matched: pd.DataFrame) -> None:
