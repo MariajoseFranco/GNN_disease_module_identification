@@ -10,27 +10,20 @@ class DataCompilation():
         self.disease_path = disease_path
         self.output_path = output_path
 
-    def get_matched_diseases(self, df_dis_pro):
+    def get_data(self) -> Union[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """
-        Load and clean the disease names from a CSV file.
-
-        The CSV is expected to have one column without a header.
-        A new column 'disease_cleaned' is added with preprocessed disease names.
+        Retrieve and clean the data from the specified paths.
 
         Returns:
-            pd.DataFrame: DataFrame with columns ['DISEASE', 'disease_cleaned'].
+            tuple:
+                - pd.DataFrame: Protein-Protein interaction data.
+                - pd.DataFrame: Gene-Protein interaction data.
+                - pd.DataFrame: Disease-Gene interaction data.
         """
-        diseases = pd.read_csv(self.disease_path)
-        cui_list = diseases['cui'].to_list()
-        df_dis_pro_matched = df_dis_pro[df_dis_pro['cui'].isin(cui_list)]
-        with open(
-            f"{self.output_path}/diseases_of_interest.csv", "w"
-        ) as f:
-            f.write("DISEASES OF INTEREST\n")
-            for disease in df_dis_pro_matched['disease_name'].unique():
-                f.write(f"{disease}\n")
-        selected_diseases = df_dis_pro_matched['disease_name'].unique().tolist()
-        return df_dis_pro_matched, selected_diseases
+        df_pro_pro = self.get_and_clean_pro_pro_data()
+        df_gen_pro = self.get_and_clean_gen_pro_data()
+        df_dis_gen = self.get_and_clean_dis_gen_data()
+        return df_pro_pro, df_gen_pro, df_dis_gen
 
     def get_and_clean_pro_pro_data(self) -> pd.DataFrame:
         """_summary_
@@ -69,21 +62,6 @@ class DataCompilation():
         df_dis_gen = pd.read_csv(f'{self.data_path}/dis_gen.tsv', sep='\t')
         df_dis_gen = df_dis_gen.drop_duplicates(subset=['disease_name', 'gene_id', 'gene_symbol'])
         return df_dis_gen
-
-    def get_data(self) -> Union[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-        """
-        Retrieve and clean the data from the specified paths.
-
-        Returns:
-            tuple:
-                - pd.DataFrame: Protein-Protein interaction data.
-                - pd.DataFrame: Gene-Protein interaction data.
-                - pd.DataFrame: Disease-Gene interaction data.
-        """
-        df_pro_pro = self.get_and_clean_pro_pro_data()
-        df_gen_pro = self.get_and_clean_gen_pro_data()
-        df_dis_gen = self.get_and_clean_dis_gen_data()
-        return df_pro_pro, df_gen_pro, df_dis_gen
 
     def get_dis_pro_data(self, df_dis_gen, df_gen_pro):
         """
@@ -146,6 +124,28 @@ class DataCompilation():
         df_pro_pro['dst_id'] = protein_encoder.transform(df_pro_pro['prB'])
         df_dis_pro['protein_id_enc'] = protein_encoder.transform(df_dis_pro['protein_id'])
         return df_pro_pro, df_dis_pro
+
+    def get_matched_diseases(self, df_dis_pro):
+        """
+        Load and clean the disease names from a CSV file.
+
+        The CSV is expected to have one column without a header.
+        A new column 'disease_cleaned' is added with preprocessed disease names.
+
+        Returns:
+            pd.DataFrame: DataFrame with columns ['DISEASE', 'disease_cleaned'].
+        """
+        diseases = pd.read_csv(self.disease_path)
+        cui_list = diseases['cui'].to_list()
+        df_dis_pro_matched = df_dis_pro[df_dis_pro['cui'].isin(cui_list)]
+        with open(
+            f"{self.output_path}/diseases_of_interest.csv", "w"
+        ) as f:
+            f.write("DISEASES OF INTEREST\n")
+            for disease in df_dis_pro_matched['disease_name'].unique():
+                f.write(f"{disease}\n")
+        selected_diseases = df_dis_pro_matched['disease_name'].unique().tolist()
+        return df_dis_pro_matched, selected_diseases
 
     def removing_duplicated_proteins(self, df_dis_pro, selected_diseases):
         """
