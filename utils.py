@@ -1,3 +1,5 @@
+import random
+
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
@@ -144,7 +146,34 @@ def visualize_disease_protein_associations(g, diseases, max_edges=200):
     plt.show()
 
 
+# Obtaining Labels Function
+
+def generate_labels(
+        seed_nodes: set[str], node_index_mapping: dict[str, int], num_nodes: int
+) -> torch.Tensor:
+    labels = torch.zeros(num_nodes, dtype=torch.long)
+    for node in seed_nodes:
+        if node in node_index_mapping:
+            labels[node_index_mapping[node]] = 1
+    return labels
+
+
 # Train/Test Split Functions
+
+def split_train_test_val_indices(
+        node_index_mapping: dict[str, int], train_ratio=0.7, val_ratio=0.15
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    all_nodes = list(node_index_mapping.values())
+    random.shuffle(all_nodes)
+    n = len(all_nodes)
+    train_end = int(train_ratio * n)
+    val_end = train_end + int(val_ratio * n)
+    return (
+        torch.tensor(all_nodes[:train_end]),
+        torch.tensor(all_nodes[train_end:val_end]),
+        torch.tensor(all_nodes[val_end:])
+    )
+
 
 def pos_train_test_split(u, v, eids, train_size, val_size, test_size):
     """

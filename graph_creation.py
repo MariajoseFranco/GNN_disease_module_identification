@@ -1,17 +1,14 @@
-import random
-
 import dgl
 import networkx as nx
 import pandas as pd
 import torch
-from networkx import Graph
 
 
 class GraphPPI():
     def __init__(self):
         pass
 
-    def create_homogeneous_graph(self, df_pro_pro: pd.DataFrame) -> Graph:
+    def create_homogeneous_graph(self, df_pro_pro: pd.DataFrame) -> nx.Graph:
         """
         Create a homogeneous graph from protein-protein interaction data.
 
@@ -24,6 +21,43 @@ class GraphPPI():
         """
         G_ppi = nx.from_pandas_edgelist(df_pro_pro, 'prA', 'prB')
         return G_ppi
+
+    def convert_to_dgl_graph(self, ppi_graph: nx.Graph) -> dgl.DGLGraph:
+        return dgl.from_networkx(ppi_graph)
+
+    def generate_random_features(self, num_nodes: int, feature_dim: int) -> torch.Tensor:
+        return torch.randn((num_nodes, feature_dim))
+
+    def generate_seed_scores_features(
+            self, seed_scores: dict[str, float], node_index_mapping: dict[str, int], num_nodes: int
+    ) -> torch.Tensor:
+        scores = torch.zeros(num_nodes, dtype=torch.float32)
+        for node, score in seed_scores.items():
+            if node in node_index_mapping:
+                scores[node_index_mapping[node]] = score
+        return scores.unsqueeze(1)
+
+    def combine_features(
+            self, rand_features: torch.Tensor, score_features: torch.Tensor
+    ) -> torch.Tensor:
+        return torch.cat([rand_features, score_features], dim=1)
+
+    def convert_networkx_to_dgl_graph(
+        self,
+        ppi_graph: nx.Graph,
+        seed_scores: dict[str, float],
+        node_index_mapping: dict[str, int],
+        feature_dim: int = 64
+    ) -> tuple[dgl.DGLGraph, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        dgl_graph = self.convert_to_dgl_graph(ppi_graph)
+        num_nodes = dgl_graph.num_nodes()
+        rand_features = self.generate_random_features(num_nodes, feature_dim)
+        score_features = self.generate_seed_scores_features(
+            seed_scores, node_index_mapping, num_nodes
+        )
+        combined_features = self.combine_features(rand_features, score_features)
+        dgl_graph.ndata['feat'] = combined_features
+        return dgl_graph
 
     def create_heterogeneous_graph(self, df_dis_pro, df_pro_pro):
         """
@@ -55,61 +89,6 @@ class GraphPPI():
         # Create heterograph
         hetero_graph = dgl.heterograph(data_dict)
         return hetero_graph
-
-    def convert_networkx_to_dgl_graph(
-            self,
-            ppi_graph: nx.Graph,
-            seed_nodes: set,
-            seed_scores: dict,
-            id_map: dict,
-            feature_dim=64
-    ):
-        """
-        Convert a NetworkX PPI graph to a DGL graph and assign node features and labels.
-
-        Args:
-            ppi_graph (nx.Graph): NetworkX graph representing protein-protein interactions.
-            seed_nodes (set): Set of seed node identifiers (proteins).
-            feature_dim (int, optional): Dimensionality of the random feature vectors assigned
-                                        to each node. Defaults to 64.
-
-        Returns:
-            dgl.DGLGraph: Homogeneous DGL graph with assigned features and
-            binary labels (1 for seed nodes, 0 otherwise).
-        """
-        # Convert to DGL graph
-        dgl_graph = dgl.from_networkx(ppi_graph)
-
-        # Assign  random node features
-        num_nodes = dgl_graph.num_nodes()
-        rand_features = torch.randn((num_nodes, feature_dim))  # shape: (N, feature_dim)
-
-        # Create a score feature: score if node is a seed, 0 otherwise
-        scores = torch.zeros(num_nodes, dtype=torch.float32)
-        for node, score in seed_scores.items():
-            if node in id_map:
-                scores[id_map[node]] = score
-
-        # Combine random features with scores
-        combined_features = torch.cat([rand_features, scores.unsqueeze(1)], dim=1)
-        dgl_graph.ndata['feat'] = combined_features
-
-        # Assign binary labels: 1 if in seed_nodes, else 0
-        labels = torch.zeros(num_nodes, dtype=torch.long)
-        nodes_in_id_map = []
-        for node in seed_nodes:
-            if node in id_map:
-                nodes_in_id_map.append(node)
-                labels[id_map[node]] = 1
-
-        # Create train/val/test splits of node indices
-        all_nodes = list(id_map.values())  # node_index
-        random.shuffle(all_nodes)
-        n = len(all_nodes)
-        train_idx = torch.tensor(all_nodes[:int(0.7*n)])
-        val_idx = torch.tensor(all_nodes[int(0.7*n):int(0.85*n)])
-        test_idx = torch.tensor(all_nodes[int(0.85*n):])
-        return dgl_graph, labels, train_idx, val_idx, test_idx
 
     def convert_to_tensors(self, train_u, train_v, test_u, test_v):
         """

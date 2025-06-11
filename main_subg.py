@@ -10,7 +10,8 @@ from data_compilation import DataCompilation
 from dot_predictor import DotPredictor
 from GNN_sage import GNN
 from graph_creation import GraphPPI
-from utils import load_config, mapping_diseases_to_proteins
+from utils import (generate_labels, load_config, mapping_diseases_to_proteins,
+                   split_train_test_val_indices)
 
 warnings.filterwarnings("ignore")
 
@@ -155,8 +156,12 @@ class Main():
             print('\nDisease of interest: ', disease)
             node_scoring = disease_pro_mapping[disease]
             seed_nodes = {key for key, _ in node_scoring.items()}
-            g, labels, train_idx, val_idx, test_idx = self.GPPI.convert_networkx_to_dgl_graph(
-                G_ppi, seed_nodes, node_scoring, node_index
+            g = self.GPPI.convert_networkx_to_dgl_graph(
+                G_ppi, node_scoring, node_index
+            )
+            labels = generate_labels(seed_nodes, node_index, g.num_nodes())
+            train_idx, val_idx, test_idx = split_train_test_val_indices(
+                node_index, train_ratio=0.7, val_ratio=0.15
             )
 
             # Prepare model and optimizer
