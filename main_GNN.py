@@ -27,7 +27,7 @@ class Main():
         self.disease_path = self.config['disease_dir']
         self.output_path = self.config['results_dir']
 
-        self.DC = DataCompilation(self.data_path, self.disease_path)
+        self.DC = DataCompilation(self.data_path, self.disease_path, self.output_path)
         self.GPPI = GraphPPI()
         self.epochs = 100
 
@@ -221,10 +221,7 @@ class Main():
         Returns:
             None
         """
-        df_pro_pro, df_gen_pro, df_dis_gen, df_dis_pro = self.DC.main()
-        df_dis_pro, self.selected_diseases = self.DC.get_matched_diseases(
-            df_dis_pro, self.output_path
-        )
+        df_pro_pro, df_gen_pro, df_dis_gen, df_dis_pro, self.selected_diseases = self.DC.main()
         seed_edge_scores = {(row['disease_id'], row['protein_id_enc']): row['score']
                             for idx, row in df_dis_pro.iterrows()}
         G_dispro = self.GPPI.create_heterogeneous_graph(df_dis_pro, df_pro_pro)
@@ -259,9 +256,12 @@ class Main():
         val_size = int(0.15 * len(eids))
 
         # Positive edges (real)
-        train_pos_u, train_pos_v, val_pos_u, val_pos_v, test_pos_u, test_pos_v, val_eids, test_eids = (
-            pos_train_test_split(u, v, eids, train_size, val_size, test_size)
-        )
+        (
+            train_pos_u, train_pos_v,
+            val_pos_u, val_pos_v,
+            test_pos_u, test_pos_v,
+            val_eids, test_eids
+        ) = pos_train_test_split(u, v, eids, train_size, val_size, test_size)
 
         # Negative edges
         train_neg_u, train_neg_v, val_neg_u, val_neg_v, test_neg_u, test_neg_v = (
