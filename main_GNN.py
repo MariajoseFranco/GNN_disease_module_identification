@@ -1,4 +1,5 @@
 import itertools
+import os
 import warnings
 
 import dgl
@@ -12,7 +13,8 @@ from data_compilation import DataCompilation
 from dot_predictor import DotPredictor
 from graph_creation import GraphPPI
 from heteroGNN import HeteroGNN as GNN
-from utils import (load_config, mapping_index_to_node, neg_train_test_split,
+from utils import (load_config, mapping_dis_pro_edges_to_scores,
+                   mapping_to_encoded_ids, neg_train_test_split,
                    pos_train_test_split,
                    visualize_disease_protein_associations)
 
@@ -155,8 +157,8 @@ class Main():
             test_pos_v,
             test_neg_u,
             test_neg_v,
-            disease_index_to_node,
-            protein_index_to_node,
+            diseases_to_encoded_ids,
+            proteins_to_encoded_ids,
             seed_nodes
     ):
         """
@@ -170,8 +172,8 @@ class Main():
             test_pos_v (Tensor): Target nodes of positive test edges.
             test_neg_u (Tensor): Source nodes of negative test edges.
             test_neg_v (Tensor): Target nodes of negative test edges.
-            disease_index_to_node (dict): Mapping from node indices to disease names.
-            protein_index_to_node (dict): Mapping from node indices to protein IDs.
+            diseases_to_encoded_ids (dict): Mapping from node indices to disease names.
+            proteins_to_encoded_ids (dict): Mapping from node indices to protein IDs.
             seed_nodes (dict): Mapping from disease names to their known seed proteins.
 
         Returns:
@@ -193,7 +195,7 @@ class Main():
         predicted_indices = (preds == 1).nonzero(as_tuple=True)[0]
         predicted_edges = [(all_u[i].item(), all_v[i].item()) for i in predicted_indices]
         predicted_named_edges = [
-            (disease_index_to_node[u], protein_index_to_node[v])
+            (diseases_to_encoded_ids[u], proteins_to_encoded_ids[v])
             for u, v in predicted_edges
         ]
         predicted_df = pd.DataFrame(predicted_named_edges, columns=['disease', 'protein'])
@@ -204,6 +206,25 @@ class Main():
             mask = predicted_df['disease'] == disease
             predicted_df.loc[mask, 'is_seed_node'] = predicted_df.loc[mask, 'protein'].isin(seeds)
         return predicted_df
+
+    def obtaining_edges_and_score_edges(self, G_dispro, seed_edge_scores, edge_type):
+        u, v = G_dispro.edges(etype=edge_type)
+        num_edges = G_dispro.num_edges(etype=edge_type)
+        seed_score_tensor = torch.zeros(num_edges, 1)
+
+        _, relation_edge_type, _ = edge_type
+
+        for i, (src, dst) in enumerate(zip(u.tolist(), v.tolist())):
+            if relation_edge_type == 'associates':
+                key = (src, dst)  # disease → protein
+            elif relation_edge_type == 'rev_associates':
+                key = (dst, src)  # protein → disease → flip it
+            else:
+                key = None  # other edge types don't use seed scores
+
+            if key in seed_edge_scores:
+                seed_score_tensor[i] = seed_edge_scores[key]
+        return u, v, seed_score_tensor
 
     def main(self):
         """
@@ -222,29 +243,26 @@ class Main():
             None
         """
         df_pro_pro, df_gen_pro, df_dis_gen, df_dis_pro, self.selected_diseases = self.DC.main()
-        seed_edge_scores = {(row['disease_id'], row['protein_id_enc']): row['score']
-                            for idx, row in df_dis_pro.iterrows()}
+        seed_edge_scores = mapping_dis_pro_edges_to_scores(df_dis_pro)
         G_dispro = self.GPPI.create_heterogeneous_graph(df_dis_pro, df_pro_pro)
 
-        disease_index_to_node, protein_index_to_node = mapping_index_to_node(
+        diseases_to_encoded_ids, proteins_to_encoded_ids = mapping_to_encoded_ids(
             df_dis_pro, df_pro_pro
         )
         edge_type = ('disease', 'associates', 'protein')
-        u, v = G_dispro.edges(etype=edge_type)
+        u, v, fwd_seed_score_tensor = self.obtaining_edges_and_score_edges(
+            G_dispro, seed_edge_scores, edge_type
+        )
+        G_dispro.edges[edge_type].data['seed_score'] = fwd_seed_score_tensor
+
         # Get all edges of the reverse type
         rev_edge_type = ('protein', 'rev_associates', 'disease')
-        rev_u, rev_v = G_dispro.edges(etype=rev_edge_type)
-
-        num_edges = G_dispro.num_edges(etype=edge_type)
-        seed_score_tensor = torch.zeros(num_edges, 1)
-
-        for i, (src, dst) in enumerate(zip(u.tolist(), v.tolist())):
-            if (src, dst) in seed_edge_scores:
-                seed_score_tensor[i] = seed_edge_scores[(src, dst)]
-
-        G_dispro.edges[edge_type].data['seed_score'] = seed_score_tensor
+        rev_u, rev_v, rev_seed_score_tensor = self.obtaining_edges_and_score_edges(
+            G_dispro, seed_edge_scores, rev_edge_type
+        )
+        G_dispro.edges[rev_edge_type].data['seed_score'] = rev_seed_score_tensor
         visualize_disease_protein_associations(
-            G_dispro, diseases=list(disease_index_to_node.keys()), max_edges=500
+            G_dispro, diseases=list(diseases_to_encoded_ids.keys()), max_edges=500
         )
 
         # Define test - train size sets
@@ -357,9 +375,10 @@ class Main():
 
         predicted_dis_pro = self.obtaining_dis_pro_predicted(
             pos_score, neg_score, test_pos_u, test_pos_v, test_neg_u, test_neg_v,
-            disease_index_to_node, protein_index_to_node, seed_nodes
+            diseases_to_encoded_ids, proteins_to_encoded_ids, seed_nodes
         )
         # Save predicted DISEASE-PROTEIN associations to a .txt file
+        os.makedirs(f'{self.output_path}/Link Prediction Task', exist_ok=True)
         predicted_dis_pro.to_csv(
             f"{self.output_path}/Link Prediction Task/predicted_dis_pro.txt",
             sep="\t",

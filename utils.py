@@ -42,7 +42,7 @@ def mapping_diseases_to_proteins(df_dis_pro: pd.DataFrame) -> dict:
     return disease_pro_mapping
 
 
-def mapping_index_to_node(df_dis_pro, df_pro_pro):
+def mapping_to_encoded_ids(df_dis_pro, df_pro_pro):
     """
     Create dictionaries mapping node indices to node names for diseases and proteins.
 
@@ -52,17 +52,26 @@ def mapping_index_to_node(df_dis_pro, df_pro_pro):
 
     Returns:
         tuple:
-            - disease_index_to_node (dict): Maps disease IDs to disease names.
-            - protein_index_to_node (dict): Maps protein IDs to protein names.
+            - diseases_to_encoded_ids (dict): Maps disease IDs to disease names.
+            - proteins_to_encoded_ids (dict): Maps protein IDs to protein names.
     """
     # Disease mapping
-    disease_index_to_node = {
+    diseases_to_encoded_ids = mapping_diseases_to_encoded_ids(df_dis_pro)
+    # Protein mapping
+    proteins_to_encoded_ids = mapping_proteins_to_encoded_ids(df_dis_pro, df_pro_pro)
+    return diseases_to_encoded_ids, proteins_to_encoded_ids
+
+
+def mapping_diseases_to_encoded_ids(df_dis_pro):
+    diseases_to_encoded_ids = {
         idx: disease for idx, disease in df_dis_pro[['disease_id', 'disease_name']]
         .drop_duplicates()
         .values
     }
+    return diseases_to_encoded_ids
 
-    # Protein mapping
+
+def mapping_proteins_to_encoded_ids(df_dis_pro, df_pro_pro):
     # Extract and unify mappings from all sources
     dis_pro_mapping = df_dis_pro[['protein_id_enc', 'protein_id']].drop_duplicates()
     src_mapping = df_pro_pro[['src_id', 'prA']].drop_duplicates()
@@ -76,10 +85,15 @@ def mapping_index_to_node(df_dis_pro, df_pro_pro):
     combined_mapping = pd.concat([dis_pro_mapping, src_mapping, dst_mapping]).drop_duplicates()
 
     # Create dictionary
-    protein_index_to_node = {
+    proteins_to_encoded_ids = {
         idx: protein for idx, protein in combined_mapping.values
     }
-    return disease_index_to_node, protein_index_to_node
+    return proteins_to_encoded_ids
+
+
+def mapping_dis_pro_edges_to_scores(df_dis_pro: pd.DataFrame) -> dict[tuple, float]:
+    return {(row['disease_id'], row['protein_id_enc']): row['score']
+            for _, row in df_dis_pro.iterrows()}
 
 
 # Visualization Functions
@@ -211,7 +225,7 @@ def neg_train_test_split(g, etype, train_size, val_size, test_size):
     Returns:
         tuple: (train_neg_u, train_neg_v, test_neg_u, test_neg_v)
     """
-    src_type, _, dst_type = g.to_canonical_etype(etype)
+    src_type, _, dst_type = etype
 
     # Get existing edges as a set
     existing_edges = set(zip(
@@ -219,7 +233,7 @@ def neg_train_test_split(g, etype, train_size, val_size, test_size):
         g.edges(etype=etype)[1].tolist()
     ))
 
-    total_neg_samples = train_size + val_size + test_size
+    total_neg_samples = g.num_edges(etype=etype)
     neg_edges = set()
     attempts = 0
     max_attempts = 100 * total_neg_samples

@@ -78,6 +78,9 @@ class GraphPPI():
             ('protein', 'interacts', 'protein'): (
                 df_pro_pro['src_id'].values, df_pro_pro['dst_id'].values
             ),
+            ('protein', 'rev_interacts', 'protein'): (
+                df_pro_pro['dst_id'].values, df_pro_pro['src_id'].values
+            ),
             ('disease', 'associates', 'protein'): (
                 df_dis_pro['disease_id'].values, df_dis_pro['protein_id_enc'].values
             ),

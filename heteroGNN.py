@@ -10,12 +10,14 @@ class HeteroGNN(nn.Module):
             'associates': dglnn.SAGEConv(in_feats, hidden_feats, aggregator_type='mean'),
             'rev_associates': dglnn.SAGEConv(hidden_feats, hidden_feats, aggregator_type='mean'),
             'interacts': dglnn.SAGEConv(in_feats, hidden_feats, aggregator_type='mean'),
+            'rev_interacts': dglnn.SAGEConv(in_feats, hidden_feats, aggregator_type='mean'),
         }, aggregate='sum')
 
         self.layers2 = dglnn.HeteroGraphConv({
             'associates': dglnn.SAGEConv(hidden_feats, hidden_feats, aggregator_type='mean'),
             'rev_associates': dglnn.SAGEConv(hidden_feats, hidden_feats, aggregator_type='mean'),
             'interacts': dglnn.SAGEConv(hidden_feats, hidden_feats, aggregator_type='mean'),
+            'rev_interacts': dglnn.SAGEConv(hidden_feats, hidden_feats, aggregator_type='mean'),
         }, aggregate='sum')
 
     def forward(self, g, inputs):  # inputs is a dict of node features

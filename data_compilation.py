@@ -216,14 +216,14 @@ class DataCompilation():
         """
         df_pro_pro, df_gen_pro, df_dis_gen = self.get_data()
         df_dis_pro = self.get_dis_pro_data(df_dis_gen, df_gen_pro)
-        df_dis_pro_encoded = self.encoding_diseases(df_dis_pro)
-        df_pro_pro_encoded, df_dis_pro_encoded = self.encoding_proteins(
-            df_pro_pro, df_dis_pro_encoded
-        )
         df_dis_pro_matched, selected_diseases = self.get_matched_diseases(
-            df_dis_pro_encoded
+            df_dis_pro
         )
         df_dis_pro_cleaned = self.removing_duplicated_proteins(
             df_dis_pro_matched, selected_diseases
         )
-        return df_pro_pro_encoded, df_gen_pro, df_dis_gen, df_dis_pro_cleaned, selected_diseases
+        df_dis_pro_encoded = self.encoding_diseases(df_dis_pro_cleaned)
+        df_pro_pro_encoded, df_dis_pro_encoded = self.encoding_proteins(
+            df_pro_pro, df_dis_pro_encoded
+        )
+        return df_pro_pro_encoded, df_gen_pro, df_dis_gen, df_dis_pro_encoded, selected_diseases
