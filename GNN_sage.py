@@ -4,28 +4,24 @@ import torch.nn.functional as F
 
 
 class GNN(nn.Module):
-    def __init__(self, features, hidden_feats):
+    def __init__(self, in_feats, hidden_feats):
         super(GNN, self).__init__()
-        self.layer1 = dglnn.SAGEConv(features, hidden_feats, aggregator_type='mean')
+        self.layer1 = dglnn.SAGEConv(in_feats, hidden_feats, aggregator_type='mean')
+        self.bn1 = nn.BatchNorm1d(hidden_feats)
         self.layer2 = dglnn.SAGEConv(hidden_feats, hidden_feats, aggregator_type='mean')
-        self.classifier = nn.Linear(hidden_feats, 2)  # <-- binary classification
+        self.bn2 = nn.BatchNorm1d(hidden_feats)
+        self.dropout = nn.Dropout(0.3)
+        self.classifier = nn.Linear(hidden_feats, 2)  # Binary classification (logits for 2 classes)
 
     def forward(self, g, features):
-        """
-        Forward pass of the GNN model using GraphSAGE convolution layers.
-
-        This method applies two layers of GraphSAGE convolution with a ReLU activation in between.
-        It takes the input node features, performs message passing, and returns the updated
-        node representations.
-
-        Args:
-            g (dgl.DGLGraph): The input graph.
-            in_feat (torch.Tensor): Input node features of shape (num_nodes, in_features).
-
-        Returns:
-            torch.Tensor: Updated node features of shape (num_nodes, hidden_features).
-        """
         h = self.layer1(g, features)
+        h = self.bn1(h)
         h = F.relu(h)
+        h = self.dropout(h)
+
         h = self.layer2(g, h)
+        h = self.bn2(h)
+        h = F.relu(h)
+        h = self.dropout(h)
+
         return self.classifier(h)

@@ -7,11 +7,12 @@ from sklearn.metrics import f1_score, precision_score, recall_score
 from torch import nn
 
 from data_compilation import DataCompilation
-from dot_predictor import DotPredictor
 from GNN_sage import GNN
 from graph_creation import GraphPPI
 from utils import (generate_labels, load_config, mapping_diseases_to_proteins,
                    split_train_test_val_indices)
+from visualizations import (plot_confusion_matrix, plot_loss_and_metrics,
+                            plot_precision_recall_curve)
 
 warnings.filterwarnings("ignore")
 
@@ -26,7 +27,6 @@ class Main():
 
         self.DC = DataCompilation(self.data_path, self.disease_path, self.output_path)
         self.GPPI = GraphPPI()
-        self.predictor = DotPredictor()
         self.epochs = 100
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -57,22 +57,41 @@ class Main():
         train_idx = train_idx.to(self.device)
         val_idx = val_idx.to(self.device)
 
+        losses = []
+        val_accuracy = []
+        val_f1s = []
+        val_precisions = []
+        val_recalls = []
+
+        best_f1 = -1
+        best_model_state = None
         for epoch in range(self.epochs):
             logits = model(g, features)
             loss = loss_fn(logits[train_idx], labels[train_idx])
+            losses.append(loss.item())
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
+            acc, f1, prec, rec, _ = self.evaluating_model(model, g, labels, val_idx, printing=False)
+            if f1 > best_f1:
+                best_f1 = f1
+                best_model_state = model.state_dict()
+            val_accuracy.append(acc)
+            val_f1s.append(f1)
+            val_precisions.append(prec)
+            val_recalls.append(rec)
             if epoch % 5 == 0:
-                acc, f1, prec, rec, _ = self.evaluating_model(model, g, labels, val_idx)
                 print(
                     f"Epoch {epoch}, Loss {loss.item():.4f}"
                     f", Val Acc {acc:.4f}, Val F1 {f1:.4f}"
-                    f", Val Prec {prec:.4f}, Val Rec {rec:.4f}")
+                    f", Val Prec {prec:.4f}, Val Rec {rec:.4f}"
+                )
+        model.load_state_dict(best_model_state)
+        return losses, val_accuracy, val_f1s, val_precisions, val_recalls
 
-    def evaluating_model(self, model, g, labels, test_idx):
+    def evaluating_model(self, model, g, labels, test_idx, printing):
         """
         Evaluates the trained model on test edges and computes accuracy.
 
@@ -100,12 +119,38 @@ class Main():
             test_idx = test_idx.to(self.device)
 
             logits = model(g, features)
-            preds = logits[test_idx].argmax(dim=1).to(self.device)
+            probs = torch.softmax(logits[test_idx], dim=1)
+            y_scores = probs[:, 1].to(self.device)
+            y_true = labels[test_idx].to(self.device)
+            threshold = self.evaluate_threshold_sweep(y_true, y_scores, printing)
+            preds = (probs[:, 1] > threshold).long()
             acc = (preds == labels[test_idx]).float().mean().item()
             f1 = f1_score(labels[test_idx], preds, average='binary', zero_division=0)
             precision = precision_score(labels[test_idx], preds, zero_division=0)
             recall = recall_score(labels[test_idx], preds, zero_division=0)
             return acc, f1, precision, recall, preds
+
+    def evaluate_threshold_sweep(self, y_true, y_scores, printing):
+        thresholds = [i / 100 for i in range(5, 96, 5)]  # from 0.05 to 0.95
+        best_f1 = -1
+        best_threshold = 0.5  # default fallback
+        # best_metrics = {}
+
+        for t in thresholds:
+            y_pred = (y_scores > t).long()
+            f1 = f1_score(y_true, y_pred, zero_division=0)
+            prec = precision_score(y_true, y_pred, zero_division=0)
+            rec = recall_score(y_true, y_pred, zero_division=0)
+
+            if printing:
+                print(f"Threshold: {t:.2f} | F1: {f1:.4f} | Prec: {prec:.4f} | Rec: {rec:.4f}")
+
+            if f1 > best_f1:
+                best_f1 = f1
+                best_threshold = t
+                # best_metrics = {"f1": f1, "precision": prec, "recall": rec}
+
+        return best_threshold
 
     def obtaining_predicted_proteins(self, node_index, preds, val_idx, seed_nodes):
         """
@@ -165,8 +210,8 @@ class Main():
             )
 
             # Prepare model and optimizer
-            model = GNN(features=g.ndata['feat'].shape[1], hidden_feats=64).to(self.device)
-            optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+            model = GNN(in_feats=g.ndata['feat'].shape[1], hidden_feats=64).to(self.device)
+            optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
 
             # Compute class counts
             num_0 = (labels[train_idx] == 0).sum().item()
@@ -176,11 +221,20 @@ class Main():
             loss_fn = nn.CrossEntropyLoss(weight=weights.to(self.device))
 
             # Training loop
-            self.training_loop(model, g, labels, train_idx, val_idx, optimizer, loss_fn)
+            losses, val_accuracy, val_f1s, val_precisions, val_recalls = self.training_loop(
+                model, g, labels, train_idx, val_idx, optimizer, loss_fn
+            )
+
+            os.makedirs(f'{self.output_path}/Subg Classifcation Task/{disease}', exist_ok=True)
+            plot_loss_and_metrics(
+                losses, val_f1s, val_recalls, val_precisions,
+                save_path=f"{self.output_path}/Subg Classifcation Task/{disease}"
+                "/training_progress.png"
+            )
 
             # Evaluation
             test_acc, test_f1, test_prec, test_rec, preds = self.evaluating_model(
-                model, g, labels, test_idx
+                model, g, labels, test_idx, printing=True
             )
             print(f"\nTest Accuracy: {test_acc:.4f}")
             print(f"Test F1: {test_f1:.4f}")
@@ -192,12 +246,28 @@ class Main():
             print('\nTest set size: ', len(test_idx))
             print(f"Test predictions breakdown: Predicted {counts[0]} as 0 "
                   f"(no seed nodes) and {counts[1]} as 1 (seed nodes)")
+
+            y_true = labels[test_idx].to(self.device)
+            y_pred = preds.to(self.device)
+
+            plot_confusion_matrix(
+                y_true, y_pred, save_path=f"{self.output_path}/Subg Classifcation Task/{disease}"
+                "/confusion_matrix.png"
+            )
+
+            logits = model(g, g.ndata['feat']).detach().to(self.device)
+            y_scores = logits[test_idx.to(self.device), 1]
+
+            plot_precision_recall_curve(
+                y_true, y_scores,
+                save_path=f"{self.output_path}/Subg Classifcation Task/{disease}/pr_curve.png"
+            )
+
             predicted_proteins = self.obtaining_predicted_proteins(
                 node_index, preds, test_idx, seed_nodes
             )
 
             # Save predicted PPIs to a .txt file
-            os.makedirs(f'{self.output_path}/Subg Classifcation Task/{disease}', exist_ok=True)
             predicted_proteins.to_csv(
                 f"{self.output_path}/Subg Classifcation Task/{disease}"
                 f"/predicted_proteins.txt", sep="\t", index=False
