@@ -8,7 +8,7 @@ from torch import nn
 
 from data_compilation import DataCompilation
 from GNN_sage import GNN
-from graph_creation import GraphPPI
+from homogeneous_graph import HomogeneousGraph
 from utils import (generate_labels, load_config, mapping_diseases_to_proteins,
                    split_train_test_val_indices)
 from visualizations import (plot_confusion_matrix, plot_loss_and_metrics,
@@ -26,7 +26,7 @@ class Main():
         self.output_path = self.config['results_dir']
 
         self.DC = DataCompilation(self.data_path, self.disease_path, self.output_path)
-        self.GPPI = GraphPPI()
+        self.HomoGraph = HomogeneousGraph()
         self.epochs = 100
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -194,14 +194,14 @@ class Main():
             None
         """
         df_pro_pro, df_gen_pro, df_dis_gen, df_dis_pro, self.selected_diseases = self.DC.main()
-        G_ppi = self.GPPI.create_homogeneous_graph(df_pro_pro)
+        G_ppi = self.HomoGraph.create_graph(df_pro_pro)
         disease_pro_mapping = mapping_diseases_to_proteins(df_dis_pro)
         node_index = {node: i for i, node in enumerate(list(G_ppi.nodes()))}
         for disease in self.selected_diseases:
             print('\nDisease of interest: ', disease)
             node_scoring = disease_pro_mapping[disease]
             seed_nodes = {key for key, _ in node_scoring.items()}
-            g = self.GPPI.convert_networkx_to_dgl_graph(
+            g = self.HomoGraph.convert_networkx_to_dgl_graph(
                 G_ppi, node_scoring, node_index
             )
             labels = generate_labels(seed_nodes, node_index, g.num_nodes())

@@ -11,7 +11,7 @@ from sklearn.metrics import roc_auc_score
 
 from data_compilation import DataCompilation
 from dot_predictor import DotPredictor
-from graph_creation import GraphPPI
+from heterogeneous_graph import HeterogeneousGraph
 from heteroGNN import HeteroGNN as GNN
 from utils import (load_config, mapping_dis_pro_edges_to_scores,
                    mapping_to_encoded_ids, neg_train_test_split,
@@ -30,7 +30,7 @@ class Main():
         self.output_path = self.config['results_dir']
 
         self.DC = DataCompilation(self.data_path, self.disease_path, self.output_path)
-        self.GPPI = GraphPPI()
+        self.HeteroGraph = HeterogeneousGraph()
         self.epochs = 100
 
     def training_loop(
@@ -244,7 +244,7 @@ class Main():
         """
         df_pro_pro, df_gen_pro, df_dis_gen, df_dis_pro, self.selected_diseases = self.DC.main()
         seed_edge_scores = mapping_dis_pro_edges_to_scores(df_dis_pro)
-        G_dispro = self.GPPI.create_heterogeneous_graph(df_dis_pro, df_pro_pro)
+        G_dispro = self.HeteroGraph.create_graph(df_dis_pro, df_pro_pro)
 
         diseases_to_encoded_ids, proteins_to_encoded_ids = mapping_to_encoded_ids(
             df_dis_pro, df_pro_pro
@@ -321,22 +321,22 @@ class Main():
             'protein': G_dispro.nodes['protein'].data['feat']
         }
 
-        train_pos_g = self.GPPI.convert_to_heterogeneous_graph(
+        train_pos_g = self.HeteroGraph.convert_to_heterogeneous_graph(
             G_dispro, edge_type, train_pos_u, train_pos_v
         )
-        train_neg_g = self.GPPI.convert_to_heterogeneous_graph(
+        train_neg_g = self.HeteroGraph.convert_to_heterogeneous_graph(
             G_dispro, edge_type, train_neg_u, train_neg_v
         )
-        val_pos_g = self.GPPI.convert_to_heterogeneous_graph(
+        val_pos_g = self.HeteroGraph.convert_to_heterogeneous_graph(
             G_dispro, edge_type, val_pos_u, val_pos_v
         )
-        val_neg_g = self.GPPI.convert_to_heterogeneous_graph(
+        val_neg_g = self.HeteroGraph.convert_to_heterogeneous_graph(
             G_dispro, edge_type, val_neg_u, val_neg_v
         )
-        test_pos_g = self.GPPI.convert_to_heterogeneous_graph(
+        test_pos_g = self.HeteroGraph.convert_to_heterogeneous_graph(
             G_dispro, edge_type, test_pos_u, test_pos_v
         )
-        test_neg_g = self.GPPI.convert_to_heterogeneous_graph(
+        test_neg_g = self.HeteroGraph.convert_to_heterogeneous_graph(
             G_dispro, edge_type, test_neg_u, test_neg_v
         )
 
