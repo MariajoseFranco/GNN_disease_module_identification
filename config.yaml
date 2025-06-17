@@ -3,7 +3,10 @@
 # General Paths
 data_dir: "./data"
 inputs_dir: "./inputs"
-results_dir: "./outputs"
+subg_path: "./SubgraphClassification"
+results_subg_dir: "./SubgraphClassification/outputs"
+linkpred_path: "./LinkPrediction"
+results_linkpred_dir: "./LinkPrediction/outputs"
 
 # Specific files
 disease_dir: "./inputs/DIAMOnD_diseases_cui.csv"

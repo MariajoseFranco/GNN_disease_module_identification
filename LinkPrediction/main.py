@@ -10,9 +10,9 @@ import torch.nn.functional as F
 from sklearn.metrics import roc_auc_score
 
 from data_compilation import DataCompilation
-from dot_predictor import DotPredictor
-from heterogeneous_graph import HeterogeneousGraph
-from heteroGNN import HeteroGNN as GNN
+from LinkPrediction.dot_predictor import DotPredictor
+from LinkPrediction.heterogeneous_graph import HeterogeneousGraph
+from LinkPrediction.heteroGNN import HeteroGNN as GNN
 from utils import (load_config, mapping_dis_pro_edges_to_scores,
                    mapping_to_encoded_ids, neg_train_test_split,
                    pos_train_test_split,
@@ -27,7 +27,8 @@ class Main():
         self.config = load_config()
         self.data_path = self.config['data_dir']
         self.disease_path = self.config['disease_dir']
-        self.output_path = self.config['results_dir']
+        self.output_path = self.config['results_linkpred_dir']
+        os.makedirs(f'{self.output_path}', exist_ok=True)
 
         self.DC = DataCompilation(self.data_path, self.disease_path, self.output_path)
         self.HeteroGraph = HeterogeneousGraph()
@@ -378,9 +379,8 @@ class Main():
             diseases_to_encoded_ids, proteins_to_encoded_ids, seed_nodes
         )
         # Save predicted DISEASE-PROTEIN associations to a .txt file
-        os.makedirs(f'{self.output_path}/Link Prediction Task', exist_ok=True)
         predicted_dis_pro.to_csv(
-            f"{self.output_path}/Link Prediction Task/predicted_dis_pro.txt",
+            f"{self.output_path}/predicted_dis_pro.txt",
             sep="\t",
             index=False
         )

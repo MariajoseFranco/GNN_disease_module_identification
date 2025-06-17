@@ -7,8 +7,8 @@ from sklearn.metrics import f1_score, precision_score, recall_score
 from torch import nn
 
 from data_compilation import DataCompilation
-from GNN_sage import GNN
-from homogeneous_graph import HomogeneousGraph
+from SubgraphClassification.GNN_sage import GNN
+from SubgraphClassification.homogeneous_graph import HomogeneousGraph
 from utils import (generate_labels, load_config, mapping_diseases_to_proteins,
                    split_train_test_val_indices)
 from visualizations import (plot_confusion_matrix, plot_loss_and_metrics,
@@ -23,7 +23,8 @@ class Main():
         self.config = load_config()
         self.data_path = self.config['data_dir']
         self.disease_path = self.config['disease_dir']
-        self.output_path = self.config['results_dir']
+        self.output_path = self.config['results_subg_dir']
+        os.makedirs(f'{self.output_path}', exist_ok=True)
 
         self.DC = DataCompilation(self.data_path, self.disease_path, self.output_path)
         self.HomoGraph = HomogeneousGraph()
@@ -225,10 +226,10 @@ class Main():
                 model, g, labels, train_idx, val_idx, optimizer, loss_fn
             )
 
-            os.makedirs(f'{self.output_path}/Subg Classifcation Task/{disease}', exist_ok=True)
+            os.makedirs(f'{self.output_path}/{disease}', exist_ok=True)
             plot_loss_and_metrics(
                 losses, val_f1s, val_recalls, val_precisions,
-                save_path=f"{self.output_path}/Subg Classifcation Task/{disease}"
+                save_path=f"{self.output_path}/{disease}"
                 "/training_progress.png"
             )
 
@@ -251,7 +252,7 @@ class Main():
             y_pred = preds.to(self.device)
 
             plot_confusion_matrix(
-                y_true, y_pred, save_path=f"{self.output_path}/Subg Classifcation Task/{disease}"
+                y_true, y_pred, save_path=f"{self.output_path}/{disease}"
                 "/confusion_matrix.png"
             )
 
@@ -260,7 +261,7 @@ class Main():
 
             plot_precision_recall_curve(
                 y_true, y_scores,
-                save_path=f"{self.output_path}/Subg Classifcation Task/{disease}/pr_curve.png"
+                save_path=f"{self.output_path}/{disease}/pr_curve.png"
             )
 
             predicted_proteins = self.obtaining_predicted_proteins(
@@ -269,13 +270,13 @@ class Main():
 
             # Save predicted PPIs to a .txt file
             predicted_proteins.to_csv(
-                f"{self.output_path}/Subg Classifcation Task/{disease}"
+                f"{self.output_path}/{disease}"
                 f"/predicted_proteins.txt", sep="\t", index=False
             )
 
             # Save real PPIs to a .txt file
             with open(
-                f"{self.output_path}/Subg Classifcation Task/{disease}/real_seeds_proteins.txt", "w"
+                f"{self.output_path}/{disease}/real_seeds_proteins.txt", "w"
             ) as f:
                 for seed in seed_nodes:
                     f.write(f"{seed}\n")
