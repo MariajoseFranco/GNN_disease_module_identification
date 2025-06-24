@@ -1,31 +1,43 @@
 import dgl.nn as dglnn
-import torch
+import torch.nn as nn
 import torch.nn.functional as F
-from torch import nn
 
 
-class GNN(torch.nn.Module):
+class GNN(nn.Module):
     def __init__(self, in_feats, hidden_feats):
-        super().__init__()
-        self.conv1 = dglnn.GraphConv(in_feats, hidden_feats)
-        self.conv2 = dglnn.GraphConv(hidden_feats, hidden_feats)
-        self.classifier = nn.Sequential(
-            nn.Linear(2 * hidden_feats, hidden_feats),
-            nn.ReLU(),
-            nn.Linear(hidden_feats, 1)
+        super(GNN, self).__init__()
+        self.layer1 = dglnn.GraphConv(
+            in_feats, hidden_feats, norm='both', allow_zero_in_degree=True
         )
+        self.bn1 = nn.BatchNorm1d(hidden_feats)
 
-    def encode(self, g, x):
-        h = self.conv1(g, x)
+        self.layer2 = dglnn.GraphConv(
+            hidden_feats, hidden_feats, norm='both', allow_zero_in_degree=True
+        )
+        self.bn2 = nn.BatchNorm1d(hidden_feats)
+
+        self.layer3 = dglnn.GraphConv(
+            hidden_feats, hidden_feats, norm='both', allow_zero_in_degree=True
+        )
+        self.bn3 = nn.BatchNorm1d(hidden_feats)
+
+        self.dropout = nn.Dropout(0.3)
+        self.classifier = nn.Linear(hidden_feats, 2)  # Binary classification (logits for 2 classes)
+
+    def forward(self, g, features):
+        h = self.layer1(g, features)
+        h = self.bn1(h)
         h = F.relu(h)
-        h = self.conv2(g, h)
-        return h
+        h = self.dropout(h)
 
-    def decode(self, z, u, v):
-        # Concatenate node embeddings of edge endpoints
-        z_uv = torch.cat([z[u], z[v]], dim=1)
-        return self.classifier(z_uv).squeeze()
+        h = self.layer2(g, h)
+        h = self.bn2(h)
+        h = F.relu(h)
+        h = self.dropout(h)
 
-    def forward(self, g, x, u, v):
-        z = self.encode(g, x)
-        return self.decode(z, u, v)
+        h = self.layer3(g, h)
+        h = self.bn3(h)
+        h = F.relu(h)
+        h = self.dropout(h)
+
+        return self.classifier(h)

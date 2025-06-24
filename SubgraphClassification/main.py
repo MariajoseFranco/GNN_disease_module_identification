@@ -3,14 +3,15 @@ import warnings
 
 import pandas as pd
 import torch
+from focal_loss import FocalLoss
 from sklearn.metrics import f1_score, precision_score, recall_score
 from torch import nn
 
 from data_compilation import DataCompilation
 from SubgraphClassification.GNN_sage import GNN
 from SubgraphClassification.homogeneous_graph import HomogeneousGraph
-from utils import (generate_labels, load_config, mapping_diseases_to_proteins,
-                   split_train_test_val_indices)
+from utils import (generate_expanded_labels, load_config,
+                   mapping_diseases_to_proteins, split_train_test_val_indices)
 from visualizations import (plot_confusion_matrix, plot_loss_and_metrics,
                             plot_precision_recall_curve)
 
@@ -28,7 +29,8 @@ class Main():
 
         self.DC = DataCompilation(self.data_path, self.disease_path, self.output_path)
         self.HomoGraph = HomogeneousGraph()
-        self.epochs = 100
+        self.epochs = 200
+        self.best_threshold = -1
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def training_loop(self, model, g, labels, train_idx, val_idx, optimizer, loss_fn):
@@ -66,6 +68,8 @@ class Main():
 
         best_f1 = -1
         best_model_state = None
+        best_threshold = 0.5  # Default fallback
+
         for epoch in range(self.epochs):
             logits = model(g, features)
             loss = loss_fn(logits[train_idx], labels[train_idx])
@@ -75,10 +79,13 @@ class Main():
             loss.backward()
             optimizer.step()
 
-            acc, f1, prec, rec, _ = self.evaluating_model(model, g, labels, val_idx, printing=False)
+            acc, f1, prec, rec, _, current_thresh = self.evaluating_model(
+                model, g, labels, val_idx
+            )
             if f1 > best_f1:
                 best_f1 = f1
                 best_model_state = model.state_dict()
+                best_threshold = current_thresh
             val_accuracy.append(acc)
             val_f1s.append(f1)
             val_precisions.append(prec)
@@ -89,10 +96,11 @@ class Main():
                     f", Val Acc {acc:.4f}, Val F1 {f1:.4f}"
                     f", Val Prec {prec:.4f}, Val Rec {rec:.4f}"
                 )
+        print(f"Best Threshold: {best_threshold:.2f}")
         model.load_state_dict(best_model_state)
-        return losses, val_accuracy, val_f1s, val_precisions, val_recalls
+        return losses, val_accuracy, val_f1s, val_precisions, val_recalls, best_threshold
 
-    def evaluating_model(self, model, g, labels, test_idx, printing):
+    def evaluating_model(self, model, g, labels, idx, threshold=None):
         """
         Evaluates the trained model on test edges and computes accuracy.
 
@@ -117,39 +125,38 @@ class Main():
             g = g.to(self.device)
             features = g.ndata['feat'].to(self.device)
             labels = labels.to(self.device)
-            test_idx = test_idx.to(self.device)
+            idx = idx.to(self.device)
 
             logits = model(g, features)
-            probs = torch.softmax(logits[test_idx], dim=1)
+            probs = torch.softmax(logits[idx], dim=1)
             y_scores = probs[:, 1].to(self.device)
-            y_true = labels[test_idx].to(self.device)
-            threshold = self.evaluate_threshold_sweep(y_true, y_scores, printing)
-            preds = (probs[:, 1] > threshold).long()
-            acc = (preds == labels[test_idx]).float().mean().item()
-            f1 = f1_score(labels[test_idx], preds, average='binary', zero_division=0)
-            precision = precision_score(labels[test_idx], preds, zero_division=0)
-            recall = recall_score(labels[test_idx], preds, zero_division=0)
-            return acc, f1, precision, recall, preds
+            y_true = labels[idx].to(self.device)
 
-    def evaluate_threshold_sweep(self, y_true, y_scores, printing):
+            if threshold is None:
+                threshold = self.evaluate_threshold_sweep(y_true, y_scores)
+            else:
+                print(f"Using fixed threshold = {threshold:.2f}")
+
+            preds = (y_scores > threshold).long()
+            acc = (preds == y_true).float().mean().item()
+            f1 = f1_score(y_true, preds, average='binary', zero_division=0)
+            precision = precision_score(y_true, preds, zero_division=0)
+            recall = recall_score(y_true, preds, zero_division=0)
+            return acc, f1, precision, recall, preds, threshold
+
+    def evaluate_threshold_sweep(self, y_true, y_scores):
         thresholds = [i / 100 for i in range(5, 96, 5)]  # from 0.05 to 0.95
         best_f1 = -1
-        best_threshold = 0.5  # default fallback
-        # best_metrics = {}
+        best_threshold = 0.05
 
         for t in thresholds:
             y_pred = (y_scores > t).long()
             f1 = f1_score(y_true, y_pred, zero_division=0)
-            prec = precision_score(y_true, y_pred, zero_division=0)
             rec = recall_score(y_true, y_pred, zero_division=0)
 
-            if printing:
-                print(f"Threshold: {t:.2f} | F1: {f1:.4f} | Prec: {prec:.4f} | Rec: {rec:.4f}")
-
-            if f1 > best_f1:
+            if rec >= 0.7 and f1 > best_f1:
                 best_f1 = f1
                 best_threshold = t
-                # best_metrics = {"f1": f1, "precision": prec, "recall": rec}
 
         return best_threshold
 
@@ -196,33 +203,58 @@ class Main():
         """
         df_pro_pro, df_gen_pro, df_dis_gen, df_dis_pro, self.selected_diseases = self.DC.main()
         G_ppi = self.HomoGraph.create_graph(df_pro_pro)
+        pr_scores = self.HomoGraph.get_protein_pagerank(G_ppi)
         disease_pro_mapping = mapping_diseases_to_proteins(df_dis_pro)
         node_index = {node: i for i, node in enumerate(list(G_ppi.nodes()))}
+        all_proteins = set(G_ppi.nodes())
         for disease in self.selected_diseases:
             print('\nDisease of interest: ', disease)
             node_scoring = disease_pro_mapping[disease]
             seed_nodes = {key for key, _ in node_scoring.items()}
+            seed_nodes = seed_nodes.intersection(G_ppi.nodes())
+
+            known_proteins = seed_nodes
+            candidates = [p for p in all_proteins if p not in known_proteins]
+            candidates = sorted(candidates, key=lambda p: pr_scores.get(p, 0), reverse=True)
+            sampled_negatives = candidates[:min(10 * len(known_proteins), len(candidates))]
+
+            expanded_nodes = list(seed_nodes) + sampled_negatives
+            labels = generate_expanded_labels(
+                seed_nodes, {k: i for i, k in enumerate(expanded_nodes)}, expanded_nodes
+            )
+
             g = self.HomoGraph.convert_networkx_to_dgl_graph(
-                G_ppi, node_scoring, node_index
+                 G_ppi.subgraph(expanded_nodes).copy(),
+                 {k: node_scoring.get(k, 0.0) for k in expanded_nodes},
+                 {k: i for i, k in enumerate(expanded_nodes)},
+                 expanded_nodes,
+                 pr_scores
             )
-            labels = generate_labels(seed_nodes, node_index, g.num_nodes())
+            print(f"# total labels: {len(labels)}")
+            print(f"Labels == 1: {(labels == 1).sum().item()}")
+            print(f"Labels == 0: {(labels == 0).sum().item()}")
             train_idx, val_idx, test_idx = split_train_test_val_indices(
-                node_index, train_ratio=0.7, val_ratio=0.15
+                labels
             )
+            # labels = generate_labels(seed_nodes, node_index, g.num_nodes())
+            # train_idx, val_idx, test_idx = split_train_test_val_indices(
+            #     node_index, train_ratio=0.7, val_ratio=0.15
+            # )
 
             # Prepare model and optimizer
             model = GNN(in_feats=g.ndata['feat'].shape[1], hidden_feats=64).to(self.device)
-            optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
+            optimizer = torch.optim.Adam(model.parameters(), lr=0.0001, weight_decay=1e-4)
 
             # Compute class counts
             num_0 = (labels[train_idx] == 0).sum().item()
             num_1 = (labels[train_idx] == 1).sum().item()
             # Create class weights: higher for underrepresented class 1
-            weights = torch.tensor([1.0, num_0 / num_1], dtype=torch.float32)
+            weights = torch.tensor([1.0, (num_0 / num_1)*0.5], dtype=torch.float32)
             loss_fn = nn.CrossEntropyLoss(weight=weights.to(self.device))
+            loss_fn = FocalLoss()
 
             # Training loop
-            losses, val_accuracy, val_f1s, val_precisions, val_recalls = self.training_loop(
+            losses, _, val_f1s, val_precisions, val_recalls, best_threshold = self.training_loop(
                 model, g, labels, train_idx, val_idx, optimizer, loss_fn
             )
 
@@ -234,8 +266,8 @@ class Main():
             )
 
             # Evaluation
-            test_acc, test_f1, test_prec, test_rec, preds = self.evaluating_model(
-                model, g, labels, test_idx, printing=True
+            test_acc, test_f1, test_prec, test_rec, preds, _ = self.evaluating_model(
+                model, g, labels, test_idx, threshold=best_threshold
             )
             print(f"\nTest Accuracy: {test_acc:.4f}")
             print(f"Test F1: {test_f1:.4f}")
