@@ -1,13 +1,12 @@
 import os
 import warnings
 
-import dgl
 import pandas as pd
 import torch
 from focal_loss import FocalLoss
 from hyperparameter_tunning import run_optuna_tuning
 from sklearn.metrics import (f1_score, precision_score, recall_score,
-                             roc_auc_score, roc_curve)
+                             roc_auc_score)
 from torch import nn
 
 from data_compilation import DataCompilation
@@ -258,7 +257,13 @@ class Main():
 
             os.makedirs(f'{self.output_path}/{disease}', exist_ok=True)
             best_trial = run_optuna_tuning(
-                g, g.ndata['feat'], labels, train_idx, val_idx, disease, f'{self.output_path}/{disease}'
+                g,
+                g.ndata['feat'],
+                labels,
+                train_idx,
+                val_idx,
+                disease,
+                f'{self.output_path}/{disease}'
             )
             best_params = best_trial.params
 
