@@ -172,9 +172,59 @@ def generate_labels(
     return labels
 
 
+def generate_balanced_labels(
+        seed_nodes: set[str], node_index_mapping: dict[str, int], all_nodes: list
+):
+    labels = torch.full((len(all_nodes),), -1, dtype=torch.long)  # -1: ignore
+
+    # Set positive labels
+    positive_indices = [
+        node_index_mapping[node] for node in seed_nodes if node in node_index_mapping
+    ]
+    labels[positive_indices] = 1
+
+    # Sample balanced negatives
+    unlabeled = [i for i in range(len(all_nodes)) if i not in positive_indices]
+    sampled_negatives = torch.tensor(
+        random.sample(unlabeled, len(positive_indices)), dtype=torch.long
+    )
+    labels[sampled_negatives] = 0
+    return labels
+
+
+def generate_expanded_labels(seed_nodes, node_index, all_nodes):
+    labels = torch.zeros(len(all_nodes), dtype=torch.long)  # default to negative class
+
+    for n in seed_nodes:
+        if n in node_index:
+            labels[node_index[n]] = 1  # mark positive
+
+    return labels
+
+
+def generate_structured_negatives(disease_pro_df, pr_scores, all_proteins, num_negatives=50):
+    # Build a map: disease → set of associated proteins
+    disease_map = disease_pro_df.groupby('disease')['protein'].apply(set).to_dict()
+
+    negatives = []
+    for disease, pos_prots in disease_map.items():
+        candidates = [
+            prot for prot in all_proteins
+            if prot not in pos_prots  # Exclude known positives
+        ]
+        # Sort by centrality
+        candidates = sorted(candidates, key=lambda p: pr_scores.get(p, 0), reverse=True)
+
+        # Sample top-N candidates
+        sampled = random.sample(candidates[:200], min(num_negatives, len(candidates)))
+        negatives += [(disease, prot) for prot in sampled]
+
+    return negatives
+
+
 # Train/Test Split Functions
 
-def split_train_test_val_indices(
+def old_split_train_test_val_indices(
         node_index_mapping: dict[str, int], train_ratio=0.7, val_ratio=0.15
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     all_nodes = list(node_index_mapping.values())
@@ -187,6 +237,36 @@ def split_train_test_val_indices(
         torch.tensor(all_nodes[train_end:val_end]),
         torch.tensor(all_nodes[val_end:])
     )
+
+
+def split_train_test_val_indices(labels, train_ratio=0.7, val_ratio=0.15):
+    labeled_idx = torch.arange(len(labels))  # all nodes are now labeled 0 or 1
+    shuffled = labeled_idx[torch.randperm(len(labeled_idx))]
+
+    n = len(shuffled)
+    n_train = int(train_ratio * n)
+    n_val = int(val_ratio * n)
+
+    train_idx = shuffled[:n_train]
+    val_idx = shuffled[n_train:n_train + n_val]
+    test_idx = shuffled[n_train + n_val:]
+
+    # Identify positive and negative indices within train set
+    pos_train_idx = train_idx[labels[train_idx] == 1]
+    neg_train_idx = train_idx[labels[train_idx] == 0]
+
+    # Oversample positives (with replacement)
+    desired_pos_size = len(neg_train_idx) // 2  # or another ratio
+    if len(pos_train_idx) > 0:
+        pos_oversampled = pos_train_idx[torch.randint(0, len(pos_train_idx), (desired_pos_size,))]
+    else:
+        pos_oversampled = pos_train_idx  # fallback if no positives
+
+    # Concatenate new training index
+    train_idx_balanced = torch.cat([neg_train_idx, pos_oversampled])
+    train_idx_balanced = train_idx_balanced[torch.randperm(len(train_idx_balanced))]  # shuffle
+
+    return train_idx_balanced, val_idx, test_idx
 
 
 def pos_train_test_split(u, v, eids, train_size, val_size, test_size):
