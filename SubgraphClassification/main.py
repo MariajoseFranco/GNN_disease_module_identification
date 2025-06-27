@@ -1,10 +1,13 @@
 import os
 import warnings
 
+import dgl
 import pandas as pd
 import torch
 from focal_loss import FocalLoss
-from sklearn.metrics import f1_score, precision_score, recall_score
+from hyperparameter_tunning import run_optuna_tuning
+from sklearn.metrics import (f1_score, precision_score, recall_score,
+                             roc_auc_score, roc_curve)
 from torch import nn
 
 from data_compilation import DataCompilation
@@ -12,8 +15,9 @@ from SubgraphClassification.GNN_sage import GNN
 from SubgraphClassification.homogeneous_graph import HomogeneousGraph
 from utils import (generate_expanded_labels, load_config,
                    mapping_diseases_to_proteins, split_train_test_val_indices)
-from visualizations import (plot_confusion_matrix, plot_loss_and_metrics,
-                            plot_precision_recall_curve)
+from visualizations import (plot_all_curves, plot_confusion_matrix,
+                            plot_loss_and_metrics, plot_precision_recall_curve,
+                            plot_roc_curve)
 
 warnings.filterwarnings("ignore")
 
@@ -32,6 +36,8 @@ class Main():
         self.epochs = 200
         self.best_threshold = -1
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.all_pr_curves = []
+        self.all_roc_curves = []
 
     def training_loop(self, model, g, labels, train_idx, val_idx, optimizer, loss_fn):
         """
@@ -79,7 +85,7 @@ class Main():
             loss.backward()
             optimizer.step()
 
-            acc, f1, prec, rec, _, current_thresh = self.evaluating_model(
+            acc, f1, prec, rec, auc, _, current_thresh = self.evaluating_model(
                 model, g, labels, val_idx
             )
             if f1 > best_f1:
@@ -94,7 +100,7 @@ class Main():
                 print(
                     f"Epoch {epoch}, Loss {loss.item():.4f}"
                     f", Val Acc {acc:.4f}, Val F1 {f1:.4f}"
-                    f", Val Prec {prec:.4f}, Val Rec {rec:.4f}"
+                    f", Val Prec {prec:.4f}, Val Rec {rec:.4f}, Val AUC Score {auc:.4f}"
                 )
         print(f"Best Threshold: {best_threshold:.2f}")
         model.load_state_dict(best_model_state)
@@ -142,10 +148,11 @@ class Main():
             f1 = f1_score(y_true, preds, average='binary', zero_division=0)
             precision = precision_score(y_true, preds, zero_division=0)
             recall = recall_score(y_true, preds, zero_division=0)
-            return acc, f1, precision, recall, preds, threshold
+            auc_score = roc_auc_score(y_true, preds)
+            return acc, f1, precision, recall, auc_score, preds, threshold
 
     def evaluate_threshold_sweep(self, y_true, y_scores):
-        thresholds = [i / 100 for i in range(5, 96, 5)]  # from 0.05 to 0.95
+        thresholds = [i / 100 for i in range(5, 96, 5)]
         best_f1 = -1
         best_threshold = 0.05
 
@@ -219,46 +226,71 @@ class Main():
             sampled_negatives = candidates[:min(10 * len(known_proteins), len(candidates))]
 
             expanded_nodes = list(seed_nodes) + sampled_negatives
+            nx_subgraph = G_ppi.subgraph(expanded_nodes).copy()
+
+            # 2. Filter out nodes with degree 0
+            non_isolated_nodes = [n for n in nx_subgraph.nodes() if nx_subgraph.degree(n) > 0]
+
+            # 3. Create new node scoring and index mapping
+            node_scoring_filtered = {k: node_scoring.get(k, 0.0) for k in non_isolated_nodes}
+            node_index_filtered = {k: i for i, k in enumerate(non_isolated_nodes)}
+
             labels = generate_expanded_labels(
-                seed_nodes, {k: i for i, k in enumerate(expanded_nodes)}, expanded_nodes
+                seed_nodes,
+                node_index_filtered,
+                non_isolated_nodes
             )
 
             g = self.HomoGraph.convert_networkx_to_dgl_graph(
-                 G_ppi.subgraph(expanded_nodes).copy(),
-                 {k: node_scoring.get(k, 0.0) for k in expanded_nodes},
-                 {k: i for i, k in enumerate(expanded_nodes)},
-                 expanded_nodes,
-                 pr_scores
+                nx_subgraph.subgraph(non_isolated_nodes).copy(),
+                node_scoring_filtered,
+                node_index_filtered,
+                non_isolated_nodes,
+                pr_scores
             )
+
             print(f"# total labels: {len(labels)}")
             print(f"Labels == 1: {(labels == 1).sum().item()}")
             print(f"Labels == 0: {(labels == 0).sum().item()}")
             train_idx, val_idx, test_idx = split_train_test_val_indices(
                 labels
             )
-            # labels = generate_labels(seed_nodes, node_index, g.num_nodes())
-            # train_idx, val_idx, test_idx = split_train_test_val_indices(
-            #     node_index, train_ratio=0.7, val_ratio=0.15
-            # )
+
+            os.makedirs(f'{self.output_path}/{disease}', exist_ok=True)
+            best_trial = run_optuna_tuning(
+                g, g.ndata['feat'], labels, train_idx, val_idx, disease, f'{self.output_path}/{disease}'
+            )
+            best_params = best_trial.params
 
             # Prepare model and optimizer
-            model = GNN(in_feats=g.ndata['feat'].shape[1], hidden_feats=64).to(self.device)
-            optimizer = torch.optim.Adam(model.parameters(), lr=0.0001, weight_decay=1e-4)
+            model = GNN(
+                in_feats=g.ndata['feat'].shape[1],
+                hidden_feats=best_params["hidden_feats"],
+                num_layers=best_params["num_layers"],
+                layer_type=best_params["layer_type"],
+                dropout=best_params["dropout"]
+            ).to(self.device)
+            optimizer = torch.optim.Adam(
+                model.parameters(), lr=best_params["lr"], weight_decay=best_params["weight_decay"]
+            )
 
-            # Compute class counts
-            num_0 = (labels[train_idx] == 0).sum().item()
-            num_1 = (labels[train_idx] == 1).sum().item()
-            # Create class weights: higher for underrepresented class 1
-            weights = torch.tensor([1.0, (num_0 / num_1)*0.5], dtype=torch.float32)
-            loss_fn = nn.CrossEntropyLoss(weight=weights.to(self.device))
-            loss_fn = FocalLoss()
+            if best_params["use_focal_loss"] is True:
+                loss_fn = FocalLoss()
+            else:
+                # Compute class counts
+                num_0 = (labels[train_idx] == 0).sum().item()
+                num_1 = (labels[train_idx] == 1).sum().item()
+                # Create class weights: higher for underrepresented class 1
+                weights = torch.tensor(
+                    [1.0, (num_0 / num_1)*best_params["proportion"]], dtype=torch.float32
+                )
+                loss_fn = nn.CrossEntropyLoss(weight=weights.to(self.device))
 
             # Training loop
             losses, _, val_f1s, val_precisions, val_recalls, best_threshold = self.training_loop(
                 model, g, labels, train_idx, val_idx, optimizer, loss_fn
             )
 
-            os.makedirs(f'{self.output_path}/{disease}', exist_ok=True)
             plot_loss_and_metrics(
                 losses, val_f1s, val_recalls, val_precisions,
                 save_path=f"{self.output_path}/{disease}"
@@ -266,13 +298,14 @@ class Main():
             )
 
             # Evaluation
-            test_acc, test_f1, test_prec, test_rec, preds, _ = self.evaluating_model(
+            test_acc, test_f1, test_prec, test_rec, test_auc, preds, _ = self.evaluating_model(
                 model, g, labels, test_idx, threshold=best_threshold
             )
             print(f"\nTest Accuracy: {test_acc:.4f}")
             print(f"Test F1: {test_f1:.4f}")
             print(f"Test Precision: {test_prec:.4f}")
             print(f"Test Recall: {test_rec:.4f}")
+            print(f"Test AUC Score: {test_auc:.4f}")
             counts = torch.bincount(preds)
             if len(counts) == 1:
                 counts = torch.cat((counts, torch.tensor([0])))
@@ -291,10 +324,18 @@ class Main():
             logits = model(g, g.ndata['feat']).detach().to(self.device)
             y_scores = logits[test_idx.to(self.device), 1]
 
-            plot_precision_recall_curve(
+            precision, recall = plot_precision_recall_curve(
                 y_true, y_scores,
                 save_path=f"{self.output_path}/{disease}/pr_curve.png"
             )
+
+            fpr, tpr = plot_roc_curve(
+                y_true, y_scores,
+                save_path=f"{self.output_path}/{disease}/roc_curve.png"
+            )
+
+            self.all_pr_curves.append((disease, precision, recall))
+            self.all_roc_curves.append((disease, fpr, tpr))
 
             predicted_proteins = self.obtaining_predicted_proteins(
                 node_index, preds, test_idx, seed_nodes
@@ -312,6 +353,25 @@ class Main():
             ) as f:
                 for seed in seed_nodes:
                     f.write(f"{seed}\n")
+
+            os.makedirs(f'{self.output_path}/{disease}/model', exist_ok=True)
+            torch.save(y_scores.cpu(), f"{self.output_path}/{disease}/model/y_scores.pt")
+            torch.save(y_true.cpu(), f"{self.output_path}/{disease}/model/y_true.pt")
+            torch.save(preds.cpu(), f"{self.output_path}/{disease}/model/preds.pt")
+            torch.save(model.state_dict(), f"{self.output_path}/{disease}/model/model.pt")
+            with open(f"{self.output_path}/{disease}/model/best_threshold.txt", "w") as f:
+                f.write(str(best_threshold))
+
+        plot_all_curves(
+            self.all_pr_curves,
+            curve_type="pr",
+            save_path=f"{self.output_path}/all_diseases_pr_curve.png"
+        )
+        plot_all_curves(
+            self.all_roc_curves,
+            curve_type="roc",
+            save_path=f"{self.output_path}/all_diseases_roc_curve.png"
+        )
 
 
 if __name__ == "__main__":

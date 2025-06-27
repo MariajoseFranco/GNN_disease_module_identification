@@ -4,34 +4,43 @@ import torch.nn.functional as F
 
 
 class GNN(nn.Module):
-    def __init__(self, in_feats, hidden_feats):
+    def __init__(self, in_feats, hidden_feats, num_layers=3, layer_type="SAGEConv", dropout=0.3):
         super(GNN, self).__init__()
-        self.layer1 = dglnn.SAGEConv(in_feats, hidden_feats, aggregator_type='mean')
-        self.bn1 = nn.BatchNorm1d(hidden_feats)
+        self.layers = nn.ModuleList()
+        self.bns = nn.ModuleList()
+        self.dropout = nn.Dropout(dropout)
 
-        self.layer2 = dglnn.SAGEConv(hidden_feats, hidden_feats, aggregator_type='mean')
-        self.bn2 = nn.BatchNorm1d(hidden_feats)
+        layer_class = self.get_layer_class(layer_type)
 
-        self.layer3 = dglnn.SAGEConv(hidden_feats, hidden_feats, aggregator_type='mean')
-        self.bn3 = nn.BatchNorm1d(hidden_feats)
+        # First layer
+        self.layers.append(layer_class(in_feats, hidden_feats))
+        self.bns.append(nn.BatchNorm1d(hidden_feats))
 
-        self.dropout = nn.Dropout(0.3)
-        self.classifier = nn.Linear(hidden_feats, 2)  # Binary classification (logits for 2 classes)
+        # Hidden layers
+        for _ in range(num_layers - 1):
+            self.layers.append(layer_class(hidden_feats, hidden_feats))
+            self.bns.append(nn.BatchNorm1d(hidden_feats))
+
+        # Final classifier
+        self.classifier = nn.Linear(hidden_feats, 2)
 
     def forward(self, g, features):
-        h = self.layer1(g, features)
-        h = self.bn1(h)
-        h = F.relu(h)
-        h = self.dropout(h)
-
-        h = self.layer2(g, h)
-        h = self.bn2(h)
-        h = F.relu(h)
-        h = self.dropout(h)
-
-        h = self.layer3(g, h)
-        h = self.bn3(h)
-        h = F.relu(h)
-        h = self.dropout(h)
+        h = features
+        for layer, bn in zip(self.layers, self.bns):
+            h = layer(g, h)
+            h = bn(h)
+            h = F.relu(h)
+            h = self.dropout(h)
 
         return self.classifier(h)
+
+    def get_layer_class(self, layer_type):
+        if layer_type == "SAGEConv":
+            def layer(in_f, out_f):
+                return dglnn.SAGEConv(in_f, out_f, aggregator_type='mean')
+        elif layer_type == "GraphConv":
+            def layer(in_f, out_f):
+                return dglnn.GraphConv(in_f, out_f)
+        else:
+            raise ValueError(f"Unsupported layer type: {layer_type}")
+        return layer
