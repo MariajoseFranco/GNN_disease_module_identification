@@ -1,4 +1,4 @@
-import itertools
+import json
 import os
 import warnings
 
@@ -7,7 +7,11 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
-from sklearn.metrics import roc_auc_score
+from focal_loss import FocalLoss
+from hyperparameter_tunning import run_optuna_tuning
+from mlp_predictor import MLPPredictor
+from sklearn.metrics import (f1_score, precision_score, recall_score,
+                             roc_auc_score)
 
 from data_compilation import DataCompilation
 from LinkPrediction.dot_predictor import DotPredictor
@@ -17,6 +21,8 @@ from utils import (load_config, mapping_dis_pro_edges_to_scores,
                    mapping_to_encoded_ids, neg_train_test_split,
                    pos_train_test_split,
                    visualize_disease_protein_associations)
+from visualizations import (plot_confusion_matrix, plot_loss_and_metrics,
+                            plot_precision_recall_curve, plot_roc_curve)
 
 warnings.filterwarnings("ignore")
 
@@ -32,7 +38,8 @@ class Main():
 
         self.DC = DataCompilation(self.data_path, self.disease_path, self.output_path)
         self.HeteroGraph = HeterogeneousGraph()
-        self.epochs = 100
+        self.epochs = 200
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def training_loop(
             self,
@@ -45,7 +52,8 @@ class Main():
             features,
             optimizer,
             pred,
-            edge_type
+            edge_type,
+            loss_fn
     ):
         """
         Trains the GNN model on a heterogeneous graph for link prediction.
@@ -63,34 +71,58 @@ class Main():
         Returns:
             dict: Node embeddings after training.
         """
-        best_auc = 0
+        best_f1 = -1
         best_state = None
+        best_threshold = 0.5
+
+        losses = []
+        val_accuracys = []
+        val_f1s = []
+        val_recs = []
+        val_precs = []
         for epoch in range(self.epochs):
             # forward
             h = model(train_g, features)
             pos_score = pred(train_pos_g, h, etype=edge_type, use_seed_score=True)
             neg_score = pred(train_neg_g, h, etype=edge_type, use_seed_score=True)
-            loss = self.compute_loss(pos_score, neg_score)
+
+            scores = torch.cat([pos_score, neg_score]).to(self.device)
+            labels = torch.cat(
+                [torch.ones(pos_score.shape[0]), torch.zeros(neg_score.shape[0])]
+            ).float().to(self.device)
+            loss = loss_fn(scores, labels)
 
             # backward
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
+            _, _, _, val_prec, val_rec, val_f1, val_auc, val_acc, current_thresh = self.evaluating_model(
+                val_pos_g, val_neg_g, pred, h, edge_type
+            )
+
+            if val_f1 > best_f1:
+                best_f1 = val_f1
+                best_state = model.state_dict()
+                best_threshold = current_thresh
+
+            losses.append(loss.item())
+            val_accuracys.append(val_acc)
+            val_f1s.append(val_f1)
+            val_recs.append(val_rec)
+            val_precs.append(val_prec)
+
             if epoch % 5 == 0:
-                val_auc, _ = self.compute_auc(
-                    pred(val_pos_g, h, etype=edge_type),
-                    pred(val_neg_g, h, etype=edge_type)
+                print(
+                    f"Epoch {epoch} | Loss: {loss.item():.4f} | Val Accuracy: {val_acc:.4f} | "
+                    f"Val AUC: {val_auc:.4f} | Val Precision: {val_prec:.4f} | "
+                    f"Val Recall: {val_rec:.4f} | Val F1: {val_f1:.4f}"
                 )
-                print(f"Epoch {epoch}, Loss: {loss:.4f}, Val AUC: {val_auc:.4f}")
-
-                if val_auc > best_auc:
-                    best_auc = val_auc
-                    best_state = model.state_dict()
+        print(f"Best Threshold: {best_threshold:.2f}")
         model.load_state_dict(best_state)  # Restore best model
-        return h
+        return h, losses, val_accuracys, val_f1s, val_precs, val_recs, best_threshold
 
-    def evaluating_model(self, test_pos_g, test_neg_g, pred, h, edge_type):
+    def evaluating_model(self, test_pos_g, test_neg_g, pred, h, edge_type, threshold=None):
         """
         Evaluates the trained model using AUC on the test set.
 
@@ -110,50 +142,46 @@ class Main():
         with torch.no_grad():
             pos_score = pred(test_pos_g, h, etype=edge_type, use_seed_score=False)
             neg_score = pred(test_neg_g, h, etype=edge_type, use_seed_score=False)
-            auc, labels = self.compute_auc(pos_score, neg_score)
-            print(f"Test AUC: {auc:.4f}")
-            return pos_score, neg_score, labels
 
-    def compute_loss(self, pos_score, neg_score):
-        """
-        Computes binary cross-entropy loss for link prediction.
+            scores = torch.cat([pos_score, neg_score]).to(self.device)
+            probs = torch.sigmoid(scores).to(self.device)
+            labels = torch.cat([
+                torch.ones(pos_score.shape[0]),
+                torch.zeros(neg_score.shape[0])
+            ]).float().to(self.device)
 
-        Args:
-            pos_score (Tensor): Model scores for positive edges.
-            neg_score (Tensor): Model scores for negative edges.
+            if threshold is None:
+                threshold = self.evaluate_threshold_sweep(labels, scores)
+            else:
+                print(f"Using fixed threshold = {threshold:.2f}")
 
-        Returns:
-            Tensor: The binary cross-entropy loss.
-        """
-        scores = torch.cat([pos_score, neg_score])
-        labels = torch.cat(
-            [torch.ones(pos_score.shape[0]), torch.zeros(neg_score.shape[0])]
-        )
-        return F.binary_cross_entropy_with_logits(scores, labels)
+            preds = (probs > threshold).long()
+            acc = (preds == labels).float().mean().item()
+            precision = precision_score(labels, preds)
+            recall = recall_score(labels, preds)
+            f1 = f1_score(labels, preds)
+            auc = roc_auc_score(labels, preds)
+            return pos_score, neg_score, labels, precision, recall, f1, auc, acc, threshold
 
-    def compute_auc(self, pos_score, neg_score):
-        """
-        Computes the AUC metric for link prediction.
+    def evaluate_threshold_sweep(self, y_true, y_scores):
+        thresholds = [i / 100 for i in range(5, 96, 5)]
+        best_f1 = -1
+        best_threshold = 0.05
 
-        Args:
-            pos_score (Tensor): Model scores for positive edges.
-            neg_score (Tensor): Model scores for negative edges.
+        for t in thresholds:
+            y_pred = (y_scores > t).long()
+            f1 = f1_score(y_true, y_pred, zero_division=0)
+            rec = recall_score(y_true, y_pred, zero_division=0)
 
-        Returns:
-            tuple: (auc, labels)
-                - auc (float): The computed AUC score.
-                - labels (ndarray): Ground truth labels for the test edges.
-        """
-        scores = torch.cat([pos_score, neg_score]).detach().cpu().numpy()
-        labels = torch.cat(
-            [torch.ones(pos_score.shape[0]), torch.zeros(neg_score.shape[0])]
-        ).cpu().numpy()
-        return roc_auc_score(labels, scores), labels
+            if rec >= 0.7 and f1 > best_f1:
+                best_f1 = f1
+                best_threshold = t
+
+        return best_threshold
 
     def obtaining_dis_pro_predicted(
             self,
-            pos_score,
-            neg_score,
+            preds,
             test_pos_u,
             test_pos_v,
             test_neg_u,
@@ -181,13 +209,6 @@ class Main():
             pd.DataFrame: DataFrame of predicted disease-protein
             associations with seed node annotation.
         """
-        # Convert logits to probabilities
-        all_scores = torch.cat([pos_score, neg_score])
-        probs = torch.sigmoid(all_scores)
-
-        # Binary prediction with threshold 0.5
-        preds = (probs >= 0.5).int()
-
         # Concatenate test edges
         all_u = torch.cat([test_pos_u, test_neg_u])
         all_v = torch.cat([test_pos_v, test_neg_v])
@@ -227,6 +248,16 @@ class Main():
                 seed_score_tensor[i] = seed_edge_scores[key]
         return u, v, seed_score_tensor
 
+    def bce_loss_fn(self, pos_graph, neg_graph, etype):
+        num_pos = pos_graph.num_edges(etype=etype)
+        num_neg = neg_graph.num_edges(etype=etype)
+        pos_weight = torch.tensor([num_neg / num_pos]).to(self.device)
+
+        def loss_fn(score, label):
+            return F.binary_cross_entropy_with_logits(score, label, pos_weight=pos_weight)
+
+        return loss_fn
+
     def main(self):
         """
         Executes the full pipeline for link prediction using a heterogeneous graph:
@@ -254,16 +285,32 @@ class Main():
         u, v, fwd_seed_score_tensor = self.obtaining_edges_and_score_edges(
             G_dispro, seed_edge_scores, edge_type
         )
-        G_dispro.edges[edge_type].data['seed_score'] = fwd_seed_score_tensor
+        G_dispro.edges[edge_type].data['seed_score'] = fwd_seed_score_tensor.to(self.device)
 
         # Get all edges of the reverse type
         rev_edge_type = ('protein', 'rev_associates', 'disease')
         rev_u, rev_v, rev_seed_score_tensor = self.obtaining_edges_and_score_edges(
             G_dispro, seed_edge_scores, rev_edge_type
         )
-        G_dispro.edges[rev_edge_type].data['seed_score'] = rev_seed_score_tensor
+        G_dispro.edges[rev_edge_type].data['seed_score'] = rev_seed_score_tensor.to(self.device)
+
+        feat_dim = 64
+        G_dispro.nodes['disease'].data['feat'] = torch.randn(
+            G_dispro.num_nodes('disease'), feat_dim
+        )
+        G_dispro.nodes['protein'].data['feat'] = torch.randn(
+            G_dispro.num_nodes('protein'), feat_dim
+        )
+        features = {
+            'disease': G_dispro.nodes['disease'].data['feat'].to(self.device),
+            'protein': G_dispro.nodes['protein'].data['feat'].to(self.device)
+        }
+
         visualize_disease_protein_associations(
-            G_dispro, diseases=list(diseases_to_encoded_ids.keys()), max_edges=500
+            G_dispro,
+            diseases=list(diseases_to_encoded_ids.keys()),
+            max_edges=500,
+            output_path=f"{self.output_path}/association_graph.png"
         )
 
         # Define test - train size sets
@@ -310,17 +357,6 @@ class Main():
             train_g = dgl.remove_edges(G_tmp, rev_eids_to_remove, etype=rev_edge_type)
         else:
             train_g = G_tmp
-        feat_dim = 64
-        G_dispro.nodes['disease'].data['feat'] = torch.randn(
-            G_dispro.num_nodes('disease'), feat_dim
-        )
-        G_dispro.nodes['protein'].data['feat'] = torch.randn(
-            G_dispro.num_nodes('protein'), feat_dim
-        )
-        features = {
-            'disease': G_dispro.nodes['disease'].data['feat'],
-            'protein': G_dispro.nodes['protein'].data['feat']
-        }
 
         train_pos_g = self.HeteroGraph.convert_to_heterogeneous_graph(
             G_dispro, edge_type, train_pos_u, train_pos_v
@@ -341,16 +377,48 @@ class Main():
             G_dispro, edge_type, test_neg_u, test_neg_v
         )
 
+        best_trial = run_optuna_tuning(
+            train_pos_g,
+            train_neg_g,
+            train_g,
+            val_pos_g,
+            val_neg_g,
+            edge_type,
+            features,
+            self.output_path
+        )
+        best_params = best_trial.params
+
         # Prepare model and optimizer
         in_feats = features['disease'].shape[1]
-        model = GNN(in_feats=in_feats, hidden_feats=feat_dim)
-        pred = DotPredictor()
+        model = GNN(
+            in_feats=in_feats,
+            hidden_feats=best_params["hidden_feats"],
+            num_layers=best_params["num_layers"],
+            layer_type=best_params["layer_type"],
+            aggregator_type=best_params["aggregator_type"],
+            dropout=best_params["dropout"]
+        ).to(self.device)
+
+        if best_params["predictor_type"] == "dot":
+            pred = DotPredictor().to(self.device)
+        else:
+            pred = MLPPredictor(
+                in_feats=in_feats,
+                hidden_feats=best_params["hidden_feats"]
+            ).to(self.device)
+
         optimizer = torch.optim.Adam(
-            itertools.chain(model.parameters(), pred.parameters()), lr=0.01
+            model.parameters(), lr=best_params["lr"], weight_decay=best_params["weight_decay"]
         )
 
+        if best_params["use_focal"] is True:
+            loss_fn = FocalLoss().to(self.device)
+        else:
+            loss_fn = self.bce_loss_fn(train_pos_g, train_neg_g, edge_type)
+
         # Training loop
-        h = self.training_loop(
+        h, loss, val_acc, val_f1, val_prec, val_rec, best_threshold = self.training_loop(
             model,
             train_pos_g,
             train_neg_g,
@@ -360,13 +428,52 @@ class Main():
             features,
             optimizer,
             pred,
-            edge_type
+            edge_type,
+            loss_fn
+        )
+
+        plot_loss_and_metrics(
+            loss, val_f1, val_rec, val_prec, save_path=f"{self.output_path}/training_progress.png"
         )
 
         # Evaluation
-        pos_score, neg_score, labels = self.evaluating_model(
-            test_pos_g, test_neg_g, pred, h, edge_type
+        (
+            pos_score,
+            neg_score,
+            labels,
+            test_prec,
+            test_rec,
+            test_f1,
+            test_auc,
+            test_acc,
+            _
+        ) = self.evaluating_model(
+            test_pos_g, test_neg_g, pred, h, edge_type, threshold=best_threshold
         )
+        print(f"\nTest Accuracy: {test_acc:.4f} | Test AUC: {test_auc:.4f} | "
+              f"Test Precision: {test_prec:.4f} | Test Recall: {test_rec:.4f} | "
+              f"Test F1: {test_f1:.4f}")
+
+        test_scores = torch.cat([pos_score, neg_score])
+        test_probs = torch.sigmoid(test_scores)
+        test_preds = (test_probs > best_threshold).long()
+
+        counts = torch.bincount(test_preds)
+        if len(counts) == 1:
+            counts = torch.cat((counts, torch.tensor([0])))
+        print('\nTest preds set size: ', len(test_preds))
+        print(f"Test predictions breakdown: Predicted {counts[0]} as 0 "
+              f"(no seed nodes) and {counts[1]} as 1 (seed nodes)")
+
+        plot_confusion_matrix(
+            labels, test_preds, save_path=f"{self.output_path}/confusion_matrix.png"
+        )
+
+        plot_precision_recall_curve(
+            labels, test_probs, save_path=f"{self.output_path}/precision_recall_curve.png"
+        )
+
+        plot_roc_curve(labels, test_probs, save_path=f"{self.output_path}/roc_curve.png")
 
         seed_nodes = {}
         for disease in self.selected_diseases:
@@ -375,7 +482,7 @@ class Main():
             seed_nodes[disease] = tuple_seed_nodes
 
         predicted_dis_pro = self.obtaining_dis_pro_predicted(
-            pos_score, neg_score, test_pos_u, test_pos_v, test_neg_u, test_neg_v,
+            test_preds, test_pos_u, test_pos_v, test_neg_u, test_neg_v,
             diseases_to_encoded_ids, proteins_to_encoded_ids, seed_nodes
         )
         # Save predicted DISEASE-PROTEIN associations to a .txt file
@@ -384,6 +491,37 @@ class Main():
             sep="\t",
             index=False
         )
+
+        os.makedirs(f'{self.output_path}/model', exist_ok=True)
+        with open(f"{self.output_path}/model/best_hyperparams.json", "w") as f:
+            json.dump(best_params, f, indent=4)
+
+        torch.save(test_probs.cpu(), f"{self.output_path}/model/y_scores.pt")
+        torch.save(labels.cpu(), f"{self.output_path}/model/y_true.pt")
+        torch.save(test_preds.cpu(), f"{self.output_path}/model/preds.pt")
+        torch.save(model.state_dict(), f"{self.output_path}/model/model.pt")
+
+        # Save best threshold to a txt file
+        with open(f"{self.output_path}/model/best_threshold.txt", "w") as f:
+            f.write(str(best_threshold))
+
+        metrics_dict = {
+            "test_precision": float(test_prec),
+            "test_recall": float(test_rec),
+            "test_f1": float(test_f1),
+            "test_auc": float(test_auc),
+            "test_accuracy": float(test_acc),
+            "threshold": float(best_threshold),
+            "true_positives": int((labels == 1).sum().item()),
+            "true_negatives": int((labels == 0).sum().item()),
+            "predicted_positives": int((test_preds == 1).sum().item()),
+            "predicted_negatives": int((test_preds == 0).sum().item()),
+            "num_total_predictions": int(test_preds.shape[0])
+        }
+
+        metrics_path = f"{self.output_path}/model/evaluation_metrics.json"
+        with open(metrics_path, "w") as f:
+            json.dump(metrics_dict, f, indent=4)
 
 
 if __name__ == "__main__":
