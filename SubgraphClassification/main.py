@@ -1,3 +1,4 @@
+import json
 import os
 import warnings
 
@@ -84,7 +85,7 @@ class Main():
             loss.backward()
             optimizer.step()
 
-            acc, f1, prec, rec, auc, _, current_thresh = self.evaluating_model(
+            _, acc, f1, prec, rec, auc, _, current_thresh = self.evaluating_model(
                 model, g, labels, val_idx
             )
             if f1 > best_f1:
@@ -133,6 +134,7 @@ class Main():
             idx = idx.to(self.device)
 
             logits = model(g, features)
+            logits = logits.to(self.device)
             probs = torch.softmax(logits[idx], dim=1)
             y_scores = probs[:, 1].to(self.device)
             y_true = labels[idx].to(self.device)
@@ -148,7 +150,7 @@ class Main():
             precision = precision_score(y_true, preds, zero_division=0)
             recall = recall_score(y_true, preds, zero_division=0)
             auc_score = roc_auc_score(y_true, preds)
-            return acc, f1, precision, recall, auc_score, preds, threshold
+            return logits, acc, f1, precision, recall, auc_score, preds, threshold
 
     def evaluate_threshold_sweep(self, y_true, y_scores):
         thresholds = [i / 100 for i in range(5, 96, 5)]
@@ -216,8 +218,8 @@ class Main():
         for disease in self.selected_diseases:
             print('\nDisease of interest: ', disease)
             node_scoring = disease_pro_mapping[disease]
-            seed_nodes = {key for key, _ in node_scoring.items()}
-            seed_nodes = seed_nodes.intersection(G_ppi.nodes())
+            seed_nodes_complete = {key for key, _ in node_scoring.items()}
+            seed_nodes = seed_nodes_complete.intersection(G_ppi.nodes())
 
             known_proteins = seed_nodes
             candidates = [p for p in all_proteins if p not in known_proteins]
@@ -303,7 +305,7 @@ class Main():
             )
 
             # Evaluation
-            test_acc, test_f1, test_prec, test_rec, test_auc, preds, _ = self.evaluating_model(
+            logits, test_acc, test_f1, test_prec, test_rec, test_auc, preds, _ = self.evaluating_model(
                 model, g, labels, test_idx, threshold=best_threshold
             )
             print(f"\nTest Accuracy: {test_acc:.4f}")
@@ -320,14 +322,12 @@ class Main():
 
             y_true = labels[test_idx].to(self.device)
             y_pred = preds.to(self.device)
+            y_scores = logits[test_idx.to(self.device), 1].to(self.device)
 
             plot_confusion_matrix(
                 y_true, y_pred, save_path=f"{self.output_path}/{disease}"
                 "/confusion_matrix.png"
             )
-
-            logits = model(g, g.ndata['feat']).detach().to(self.device)
-            y_scores = logits[test_idx.to(self.device), 1]
 
             precision, recall = plot_precision_recall_curve(
                 y_true, y_scores,
@@ -343,7 +343,7 @@ class Main():
             self.all_roc_curves.append((disease, fpr, tpr))
 
             predicted_proteins = self.obtaining_predicted_proteins(
-                node_index, preds, test_idx, seed_nodes
+                node_index_filtered, preds, test_idx, seed_nodes
             )
 
             # Save predicted PPIs to a .txt file
@@ -360,12 +360,36 @@ class Main():
                     f.write(f"{seed}\n")
 
             os.makedirs(f'{self.output_path}/{disease}/model', exist_ok=True)
+            with open(f"{self.output_path}/{disease}/model/best_hyperparams.json", "w") as f:
+                json.dump(best_params, f, indent=4)
+
             torch.save(y_scores.cpu(), f"{self.output_path}/{disease}/model/y_scores.pt")
             torch.save(y_true.cpu(), f"{self.output_path}/{disease}/model/y_true.pt")
             torch.save(preds.cpu(), f"{self.output_path}/{disease}/model/preds.pt")
             torch.save(model.state_dict(), f"{self.output_path}/{disease}/model/model.pt")
-            with open(f"{self.output_path}/{disease}/model/best_threshold.txt", "w") as f:
-                f.write(str(best_threshold))
+
+            metrics_dict = {
+                "test_precision": float(test_prec),
+                "test_recall": float(test_rec),
+                "test_f1": float(test_f1),
+                "test_auc": float(test_auc),
+                "test_accuracy": float(test_acc),
+                "threshold": float(best_threshold),
+                "true_positives": int((labels[test_idx] == 1).sum().item()),
+                "true_negatives": int((labels[test_idx] == 0).sum().item()),
+                "predicted_positives": int((preds == 1).sum().item()),
+                "predicted_negatives": int((preds == 0).sum().item()),
+                "num_total_predictions": int(preds.shape[0])
+            }
+
+            with open(f"{self.output_path}/{disease}/model/evaluation_metrics.json", "w") as f:
+                json.dump(metrics_dict, f, indent=4)
+
+            with open(f"{self.output_path}/{disease}/model/node_index.json", "w") as f:
+                json.dump(node_index_filtered, f, indent=4)
+
+            with open(f"{self.output_path}/{disease}/model/nodes_used.json", "w") as f:
+                json.dump(non_isolated_nodes, f, indent=4)
 
         plot_all_curves(
             self.all_pr_curves,
