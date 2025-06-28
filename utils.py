@@ -98,7 +98,7 @@ def mapping_dis_pro_edges_to_scores(df_dis_pro: pd.DataFrame) -> dict[tuple, flo
 
 # Visualization Functions
 
-def visualize_disease_protein_associations(g, diseases, max_edges=200):
+def visualize_disease_protein_associations(g, diseases, max_edges=200, output_path=None):
     """
     Visualize disease-protein associations from a heterogeneous graph using NetworkX and Matplotlib.
 
@@ -106,11 +106,11 @@ def visualize_disease_protein_associations(g, diseases, max_edges=200):
         g (dgl.DGLHeteroGraph): The heterogeneous graph containing disease-protein associations.
         diseases (list): List of disease node indices to visualize.
         max_edges (int): Maximum number of edges to plot. Defaults to 200.
+        output_path (str or None): If provided, saves the figure to this path instead of displaying it.
 
     Returns:
         None
     """
-    # Only use 'associates' edge type
     etype = ('disease', 'associates', 'protein')
     src, dst = g.edges(etype=etype)
 
@@ -119,7 +119,6 @@ def visualize_disease_protein_associations(g, diseases, max_edges=200):
     src = src[mask]
     dst = dst[mask]
 
-    # Optionally limit number of edges
     if len(src) > max_edges:
         indices = torch.randperm(len(src))[:max_edges]
         src = src[indices]
@@ -148,7 +147,6 @@ def visualize_disease_protein_associations(g, diseases, max_edges=200):
         alpha=0.9
     )
 
-    # Legend
     legend_elements = [
         Patch(facecolor='lightcoral', label='Diseases'),
         Patch(facecolor='skyblue', label='Proteins')
@@ -157,7 +155,14 @@ def visualize_disease_protein_associations(g, diseases, max_edges=200):
     plt.title("Disease–Protein Associations")
     plt.axis('off')
     plt.tight_layout()
-    plt.show()
+
+    if output_path:
+        plt.savefig(output_path, dpi=300)
+        print(f"Visualization saved to {output_path}")
+    else:
+        plt.show()
+
+    plt.close()
 
 
 # Obtaining Labels Function
