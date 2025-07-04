@@ -190,3 +190,83 @@ class HomogeneousGraph:
             torch.Tensor: Combined features of shape (N, D).
         """
         return torch.cat([rand_features, score_features, degree_features, pagerank_features], dim=1)
+
+    def get_node_scoring(
+            self, disease_pro_mapping: dict[str, dict[str, float]], disease: str
+    ) -> dict[str, float]:
+        """
+        Retrieves the protein scoring dictionary for a specific disease.
+
+        Args:
+            disease_pro_mapping (dict): Dictionary mapping diseases to protein–score dictionaries.
+            disease (str): The disease of interest.
+
+        Returns:
+            dict: Dictionary mapping protein IDs to scores for the specified disease.
+        """
+        return disease_pro_mapping[disease]
+
+    def get_seed_nodes(self, G_ppi: nx.Graph, node_scoring: dict[str, float]) -> set[str]:
+        """
+        Identifies seed proteins for a disease that are present in the PPI graph.
+
+        Args:
+            G_ppi (nx.Graph): Protein–protein interaction graph.
+            node_scoring (dict): Dictionary of proteins with associated scores.
+
+        Returns:
+            set: Seed proteins that exist in the PPI graph.
+        """
+        seed_nodes_complete = {key for key, _ in node_scoring.items()}
+        seed_nodes = seed_nodes_complete.intersection(G_ppi.nodes())
+        return seed_nodes
+
+    def get_expanded_nodes(
+            self, seed_nodes: set[str], all_proteins: set[str], pr_scores: dict[str, float]
+    ) -> list[str]:
+        """
+        Generates an expanded set of nodes including seed proteins and sampled negatives.
+
+        Args:
+            seed_nodes (set): Known disease-associated proteins.
+            all_proteins (set): All proteins in the PPI network.
+            pr_scores (dict): Precomputed PageRank scores for each protein.
+
+        Returns:
+            list: List of expanded nodes including seed and negative candidates.
+        """
+        known_proteins = seed_nodes
+        candidates = [p for p in all_proteins if p not in known_proteins]
+        candidates = sorted(candidates, key=lambda p: pr_scores.get(p, 0), reverse=True)
+        sampled_negatives = candidates[:min(10 * len(known_proteins), len(candidates))]
+
+        expanded_nodes = list(seed_nodes) + sampled_negatives
+        return expanded_nodes
+
+    def filtering_info(
+        self,
+        G_ppi: nx.Graph,
+        expanded_nodes: list[str],
+        node_scoring: dict[str, float]
+    ) -> tuple[nx.Graph, list[str], dict[str, float], dict[str, int]]:
+        """
+        Filters the expanded subgraph by removing isolated nodes and builds necessary mappings.
+
+        Args:
+            G_ppi (nx.Graph): Full protein–protein interaction graph.
+            expanded_nodes (list): Nodes selected for subgraph extraction.
+            node_scoring (dict): Dictionary of protein scores.
+
+        Returns:
+            tuple:
+                - nx_subgraph (nx.Graph): Filtered subgraph.
+                - non_isolated_nodes (list): Nodes with degree > 0.
+                - node_scoring_filtered (dict): Scores for non-isolated nodes.
+                - node_index_filtered (dict): Mapping from protein ID to integer index.
+        """
+        nx_subgraph = G_ppi.subgraph(expanded_nodes).copy()
+        non_isolated_nodes = [n for n in nx_subgraph.nodes() if nx_subgraph.degree(n) > 0]
+
+        node_scoring_filtered = {k: node_scoring.get(k, 0.0) for k in non_isolated_nodes}
+        node_index_filtered = {k: i for i, k in enumerate(non_isolated_nodes)}
+        return nx_subgraph, non_isolated_nodes, node_scoring_filtered, node_index_filtered
