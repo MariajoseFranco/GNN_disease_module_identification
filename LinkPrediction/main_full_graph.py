@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 import warnings
 
 import dgl
@@ -7,20 +8,19 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
+from sklearn.metrics import (f1_score, precision_score, recall_score,
+                             roc_auc_score)
+
+sys.path.append(os.path.abspath("/Users/mariajosefranco/Desktop/Data Science - UPM/TFM/project/GNN_disease_module_identification"))
 from focal_loss import FocalLoss
 from hyperparameter_tunning import run_optuna_tuning
 from mlp_predictor import MLPPredictor
-from sklearn.metrics import (f1_score, precision_score, recall_score,
-                             roc_auc_score)
 
 from data_compilation import DataCompilation
 from LinkPrediction.dot_predictor import DotPredictor
 from LinkPrediction.heterogeneous_graph import HeterogeneousGraph
 from LinkPrediction.heteroGNN import HeteroGNN as GNN
-from utils import (load_config, mapping_dis_pro_edges_to_scores,
-                   mapping_to_encoded_ids, neg_train_test_split,
-                   pos_train_test_split,
-                   visualize_disease_protein_associations)
+from utils import load_config, neg_train_test_split, pos_train_test_split
 from visualizations import (plot_confusion_matrix, plot_loss_and_metrics,
                             plot_precision_recall_curve, plot_roc_curve)
 
@@ -39,7 +39,7 @@ class Main():
         self.DC = DataCompilation(self.data_path, self.disease_path, self.output_path)
         self.HeteroGraph = HeterogeneousGraph()
         self.epochs = 200
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     def training_loop(
             self,
@@ -179,9 +179,89 @@ class Main():
 
         return best_threshold
 
+    def compute_loss(self, pos_score, neg_score):
+        """
+        Computes binary cross-entropy loss for link prediction.
+
+        Args:
+            pos_score (Tensor): Model scores for positive edges.
+            neg_score (Tensor): Model scores for negative edges.
+
+        Returns:
+            Tensor: The binary cross-entropy loss.
+        """
+        scores = torch.cat([pos_score, neg_score])
+        labels = torch.cat(
+            [torch.ones(pos_score.shape[0]), torch.zeros(neg_score.shape[0])]
+        )
+        return F.binary_cross_entropy_with_logits(scores, labels)
+
+    def compute_auc(self, pos_score, neg_score):
+        """
+        Computes the AUC metric for link prediction.
+
+        Args:
+            pos_score (Tensor): Model scores for positive edges.
+            neg_score (Tensor): Model scores for negative edges.
+
+        Returns:
+            tuple: (auc, labels)
+                - auc (float): The computed AUC score.
+                - labels (ndarray): Ground truth labels for the test edges.
+        """
+        scores = torch.cat([pos_score, neg_score]).detach().cpu().numpy()
+        labels = torch.cat(
+            [torch.ones(pos_score.shape[0]), torch.zeros(neg_score.shape[0])]
+        ).cpu().numpy()
+        return roc_auc_score(labels, scores), labels
+
+    def obtaining_dis_dru_predicted(
+            self,
+            pos_score,
+            neg_score,
+            test_pos_u,
+            test_pos_v,
+            test_neg_u,
+            test_neg_v,
+            diseases_to_encoded_ids,
+            drugs_to_encoded_ids
+    ):
+        all_scores = torch.cat([pos_score, neg_score])
+        probs = torch.sigmoid(all_scores)
+        preds = (probs >= 0.5).int()
+
+        # Concatenate test edges
+        all_u = torch.cat([test_pos_u, test_neg_u])
+        all_v = torch.cat([test_pos_v, test_neg_v])
+
+        # Set of known associations from test_pos edges
+        known_associations_set = set(zip(
+            test_pos_u.tolist(),
+            test_pos_v.tolist()
+        ))
+
+        # Select predicted positive edges
+        predicted_indices = (preds == 1).nonzero(as_tuple=True)[0]
+        predicted_edges = [(all_u[i].item(), all_v[i].item()) for i in predicted_indices]
+
+        # Map node IDs to names and annotate known associations
+        predicted_named_edges = []
+        known_flags = []
+        for u, v in predicted_edges:
+            dis = diseases_to_encoded_ids[u]
+            dru = drugs_to_encoded_ids[v]
+            predicted_named_edges.append((dis, dru))
+            known_flags.append((u, v) in known_associations_set)
+
+        predicted_df = pd.DataFrame(predicted_named_edges, columns=['disease', 'drug'])
+        predicted_df['known_association'] = known_flags
+        predicted_df = predicted_df.sort_values(by='disease').reset_index(drop=True)
+        return predicted_df
+
     def obtaining_dis_pro_predicted(
             self,
-            preds,
+            pos_score,
+            neg_score,
             test_pos_u,
             test_pos_v,
             test_neg_u,
@@ -209,6 +289,13 @@ class Main():
             pd.DataFrame: DataFrame of predicted disease-protein
             associations with seed node annotation.
         """
+        # Convert logits to probabilities
+        all_scores = torch.cat([pos_score, neg_score])
+        probs = torch.sigmoid(all_scores)
+
+        # Binary prediction with threshold 0.5
+        preds = (probs >= 0.5).int()
+
         # Concatenate test edges
         all_u = torch.cat([test_pos_u, test_neg_u])
         all_v = torch.cat([test_pos_v, test_neg_v])
@@ -274,25 +361,40 @@ class Main():
         Returns:
             None
         """
-        df_pro_pro, df_gen_pro, df_dis_gen, df_dis_pro, self.selected_diseases = self.DC.main()
-        seed_edge_scores = mapping_dis_pro_edges_to_scores(df_dis_pro)
-        G_dispro = self.HeteroGraph.create_graph(df_dis_pro, df_pro_pro)
+        (
+            df_ddi_dru, df_ddi_phe, df_dis_dru_the,
+            df_dis_pat, df_dis_pro, df_dis_sym,
+            df_dru_dru, df_dru_pro, df_dru_sym_ind,
+            df_dru_sym_sef, df_pro_pat, df_pro_pro
+        ) = self.DC.get_full_graph_data()
+        df_dis_pro_matched, self.selected_diseases = self.DC.get_matched_diseases_full_graph(
+            df_dis_pro
+        )
+        # seed_edge_scores = mapping_dis_pro_edges_to_scores_full_graph(df_dis_pro_matched)
 
-        diseases_to_encoded_ids, proteins_to_encoded_ids = mapping_to_encoded_ids(
-            df_dis_pro, df_pro_pro
-        )
-        edge_type = ('disease', 'associates', 'protein')
-        u, v, fwd_seed_score_tensor = self.obtaining_edges_and_score_edges(
-            G_dispro, seed_edge_scores, edge_type
-        )
-        G_dispro.edges[edge_type].data['seed_score'] = fwd_seed_score_tensor.to(self.device)
+        edge_specs = [
+            ('drug', 'ddi_dru', 'drug', df_ddi_dru['ddi'], df_ddi_dru['dru']),
+            ('drug', 'ddi_phe', 'phenotype', df_ddi_phe['ddi'], df_ddi_phe['phe']),
+            ('disease', 'dis_dru_the', 'drug', df_dis_dru_the['dis'], df_dis_dru_the['dru']),
+            ('disease', 'dis_pat', 'pathway', df_dis_pat['dis'], df_dis_pat['pat']),
+            ('disease', 'dis_pro', 'protein', df_dis_pro['dis'], df_dis_pro['pro']),
+            ('disease', 'dse_sym', 'phenotype', df_dis_sym['dis'], df_dis_sym['sym']),
+            ('drug', 'druA_druB', 'drug', df_dru_dru['drA'], df_dru_dru['drB']),
+            ('drug', 'dru_pro', 'protein', df_dru_pro['dru'], df_dru_pro['pro']),
+            ('drug', 'dru_sym_ind', 'phenotype', df_dru_sym_ind['dru'], df_dru_sym_ind['sym']),
+            ('drug', 'dru_sym_sef', 'phenotype', df_dru_sym_sef['dru'], df_dru_sym_sef['sym']),
+            ('protein', 'pro_pat', 'pathway', df_pro_pat['pro'], df_pro_pat['pat']),
+            ('protein', 'proA_proB', 'protein', df_pro_pro['prA'], df_pro_pro['prB']),
+        ]
+
+        G_dispro, node_maps, edges = self.HeteroGraph.create_heterograph_with_mapped_ids(edge_specs)
+
+        edge_type = ('disease', 'dis_dru_the', 'drug')
+        u, v = G_dispro.edges(etype=edge_type)
 
         # Get all edges of the reverse type
-        rev_edge_type = ('protein', 'rev_associates', 'disease')
-        rev_u, rev_v, rev_seed_score_tensor = self.obtaining_edges_and_score_edges(
-            G_dispro, seed_edge_scores, rev_edge_type
-        )
-        G_dispro.edges[rev_edge_type].data['seed_score'] = rev_seed_score_tensor.to(self.device)
+        rev_edge_type = ('drug', 'rev_dis_dru_the', 'disease')
+        rev_u, rev_v = G_dispro.edges(etype=rev_edge_type)
 
         feat_dim = 64
         G_dispro.nodes['disease'].data['feat'] = torch.randn(
@@ -301,17 +403,23 @@ class Main():
         G_dispro.nodes['protein'].data['feat'] = torch.randn(
             G_dispro.num_nodes('protein'), feat_dim
         )
+        G_dispro.nodes['drug'].data['feat'] = torch.randn(
+            G_dispro.num_nodes('drug'), feat_dim
+        )
+        G_dispro.nodes['pathway'].data['feat'] = torch.randn(
+            G_dispro.num_nodes('pathway'), feat_dim
+        )
+        G_dispro.nodes['phenotype'].data['feat'] = torch.randn(
+            G_dispro.num_nodes('phenotype'), feat_dim
+        )
+
         features = {
             'disease': G_dispro.nodes['disease'].data['feat'].to(self.device),
-            'protein': G_dispro.nodes['protein'].data['feat'].to(self.device)
+            'protein': G_dispro.nodes['protein'].data['feat'].to(self.device),
+            'drug': G_dispro.nodes['drug'].data['feat'].to(self.device),
+            'pathway': G_dispro.nodes['pathway'].data['feat'].to(self.device),
+            'phenotype': G_dispro.nodes['phenotype'].data['feat'].to(self.device)
         }
-
-        visualize_disease_protein_associations(
-            G_dispro,
-            diseases=list(diseases_to_encoded_ids.keys()),
-            max_edges=500,
-            output_path=f"{self.output_path}/association_graph.png"
-        )
 
         # Define test - train size sets
         eids = np.arange(G_dispro.num_edges(etype=edge_type))
@@ -387,9 +495,21 @@ class Main():
             edge_type,
             features,
             self.output_path,
-            all_etypes=etypes
+            all_etypes=etypes,
+            drug=True
         )
         best_params = best_trial.params
+        # best_params = {
+        #     "hidden_feats": 128,
+        #     "num_layers": 2,
+        #     "layer_type": "GraphConv",
+        #     "aggregator_type": "mean",
+        #     "dropout": 0.106,
+        #     "predictor_type": "mlp",
+        #     "lr": 0.00041,
+        #     "weight_decay": 0.00081,
+        #     "use_focal": False
+        # }
 
         # Prepare model and optimizer
         in_feats = features['disease'].shape[1]
@@ -436,6 +556,8 @@ class Main():
             loss_fn
         )
 
+        os.makedirs(f"{self.output_path}/drugs", exist_ok=True)
+        self.output_path = f"{self.output_path}/drugs"
         plot_loss_and_metrics(
             loss, val_f1, val_rec, val_prec, save_path=f"{self.output_path}/training_progress.png"
         )
@@ -479,19 +601,14 @@ class Main():
 
         plot_roc_curve(labels, test_probs, save_path=f"{self.output_path}/roc_curve.png")
 
-        seed_nodes = {}
-        for disease in self.selected_diseases:
-            df = df_dis_pro[df_dis_pro['disease_name'] == disease]
-            tuple_seed_nodes = tuple(df['protein_id'])
-            seed_nodes[disease] = tuple_seed_nodes
-
-        predicted_dis_pro = self.obtaining_dis_pro_predicted(
-            test_preds, test_pos_u, test_pos_v, test_neg_u, test_neg_v,
-            diseases_to_encoded_ids, proteins_to_encoded_ids, seed_nodes
+        diseases_to_encoded_ids = {v: k for k, v in node_maps['disease'].items()}
+        drugs_to_encoded_ids = {v: k for k, v in node_maps['drug'].items()}
+        predicted_dis_dru = self.obtaining_dis_dru_predicted(
+            pos_score, neg_score, test_pos_u, test_pos_v, test_neg_u, test_neg_v,
+            diseases_to_encoded_ids, drugs_to_encoded_ids
         )
-        # Save predicted DISEASE-PROTEIN associations to a .txt file
-        predicted_dis_pro.to_csv(
-            f"{self.output_path}/predicted_dis_pro.txt",
+        predicted_dis_dru.to_csv(
+            f"{self.output_path}/predicted_dis_dru.txt",
             sep="\t",
             index=False
         )

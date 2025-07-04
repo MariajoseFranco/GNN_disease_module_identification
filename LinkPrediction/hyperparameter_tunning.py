@@ -13,85 +13,91 @@ from torch.optim import Adam
 from LinkPrediction.heteroGNN import HeteroGNN as GNN
 
 
-def objective(trial):
-    hidden_feats = trial.suggest_categorical("hidden_feats", [32, 64, 128, 256])
-    aggregator_type = trial.suggest_categorical("aggregator_type", ["mean", "lstm"])
-    dropout = trial.suggest_float("dropout", 0.0, 0.5)
-    lr = trial.suggest_loguniform("lr", 1e-5, 1e-2)
-    weight_decay = trial.suggest_loguniform("weight_decay", 1e-6, 1e-2)
-    num_layers = trial.suggest_int("num_layers", 2, 5)
-    layer_type = trial.suggest_categorical("layer_type", ["GraphConv", "SAGEConv"])
-    predictor_type = trial.suggest_categorical("predictor_type", ["dot", "mlp"])
-    use_focal = trial.suggest_categorical("use_focal", [True, False])
-
-    # === Model instantiation ===
-    model = GNN(
-        in_feats=features['disease'].shape[1],  # assuming you're using disease node input
-        hidden_feats=hidden_feats,
-        num_layers=num_layers,
-        layer_type=layer_type,
-        aggregator_type=aggregator_type,
-        dropout=dropout
-    ).to(device)
-
-    # === Predictor instantiation ===
-    if predictor_type == "dot":
-        pred = DotPredictor().to(device)
-    else:
-        pred = MLPPredictor(
-            in_feats=features['disease'].shape[1],  # input feature dim of one node
-            hidden_feats=hidden_feats
-        ).to(device)
-
-    if use_focal:
-        loss_fn = FocalLoss().to(device)
-    else:
-        loss_fn = bce_loss_fn(train_pos_g, train_neg_g, edge_type)
-
-    # === Optimizer ===
-    optimizer = Adam(
-        itertools.chain(model.parameters(), pred.parameters()),
-        lr=lr,
-        weight_decay=weight_decay
-    )
-
-    # === Training ===
-    h, _, val_acc, val_f1, _, _, _ = training_loop(
-        model,
-        train_pos_g,
-        train_neg_g,
-        train_g,
-        val_pos_g,
-        val_neg_g,
-        features,
-        optimizer,
-        pred,
-        edge_type,
-        loss_fn
-    )
-
-    return val_f1
-
-
-def run_optuna_tuning(train_pos_g_, train_neg_g_, train_g_, val_pos_g_, val_neg_g_, edge_type_, features_, path):
-    db_path = f"{path}/optuna_study.db"
+def run_optuna_tuning(
+    train_pos_g_, train_neg_g_, train_g_,
+    val_pos_g_, val_neg_g_,
+    edge_type_, features_, path, all_etypes, drug=False
+):
+    db_path = f"{path}/drugs_optuna_study.db"
     storage = f"sqlite:///{db_path}"
-    study_name = "link_prediction_study"
+    study_name = "link_prediction_drugs_study"
 
-    global train_pos_g, train_neg_g, train_g, val_pos_g, val_neg_g, edge_type, features, device
+    global device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    # Move graphs to device
     train_pos_g = train_pos_g_.to(device)
     train_neg_g = train_neg_g_.to(device)
     train_g = train_g_.to(device)
     val_pos_g = val_pos_g_.to(device)
     val_neg_g = val_neg_g_.to(device)
-    edge_type = edge_type_
-    features = features = {
-        'disease': features_['disease'].to(device),
-        'protein': features_['protein'].to(device)
-    }
 
+    # Prepare features dictionary
+    if drug:
+        features = {
+            'disease': features_['disease'].to(device),
+            'protein': features_['protein'].to(device),
+            'drug': features_['drug'].to(device),
+            'pathway': features_['pathway'].to(device),
+            'phenotype': features_['phenotype'].to(device)
+        }
+    else:
+        features = {
+            'disease': features_['disease'].to(device),
+            'protein': features_['protein'].to(device)
+        }
+
+    # Pass values via closure/global
+    def objective(trial):
+        hidden_feats = trial.suggest_categorical("hidden_feats", [32, 64, 128, 256])
+        aggregator_type = trial.suggest_categorical("aggregator_type", ["mean", "lstm"])
+        dropout = trial.suggest_float("dropout", 0.0, 0.5)
+        lr = trial.suggest_loguniform("lr", 1e-5, 1e-2)
+        weight_decay = trial.suggest_loguniform("weight_decay", 1e-6, 1e-2)
+        num_layers = trial.suggest_int("num_layers", 2, 5)
+        layer_type = trial.suggest_categorical("layer_type", ["GraphConv", "SAGEConv"])
+        predictor_type = trial.suggest_categorical("predictor_type", ["dot", "mlp"])
+        use_focal = trial.suggest_categorical("use_focal", [True, False])
+
+        model = GNN(
+            in_feats=features['disease'].shape[1],
+            hidden_feats=hidden_feats,
+            etypes=list(train_g.etypes),
+            node_types=list(features.keys()),  # <- ¡clave para que use 'disease', 'protein', 'drug', 'pathway'!
+            num_layers=num_layers,
+            layer_type=layer_type,
+            aggregator_type=aggregator_type,
+            dropout=dropout
+        ).to(device)
+
+        if predictor_type == "dot":
+            pred = DotPredictor().to(device)
+        else:
+            pred = MLPPredictor(
+                in_feats=features['disease'].shape[1],
+                hidden_feats=hidden_feats
+            ).to(device)
+
+        if use_focal:
+            loss_fn = FocalLoss().to(device)
+        else:
+            loss_fn = bce_loss_fn(train_pos_g, train_neg_g, edge_type_)
+
+        h, _, val_acc, val_f1, _, _, _ = training_loop(
+            model, train_pos_g, train_neg_g, train_g,
+            val_pos_g, val_neg_g, features,
+            optimizer=Adam(
+                itertools.chain(model.parameters(), pred.parameters()),
+                lr=lr,
+                weight_decay=weight_decay
+            ),
+            pred=pred,
+            edge_type=edge_type_,
+            loss_fn=loss_fn
+        )
+        return val_f1
+
+    # Run Optuna
     study = optuna.create_study(
         study_name=study_name,
         direction="maximize",

@@ -152,6 +152,26 @@ class DataCompilation():
         self.save_matched_diseases_to_csv(df_dis_pro_matched)
         return df_dis_pro_matched, selected_diseases
 
+    def get_matched_diseases_full_graph(self, df_dis_pro: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+        """
+        Filter disease-protein interactions to keep only selected diseases (based on CUI list).
+        Also writes the matched disease names to a CSV file.
+
+        Args:
+            df_dis_pro (pd.DataFrame): Encoded disease-protein interaction data.
+            Must include a 'cui' and 'disease_name' column.
+
+        Returns:
+            tuple:
+                - pd.DataFrame: Filtered disease-protein interaction data for matched diseases.
+                - list[str]: List of matched disease names.
+        """
+        diseases = pd.read_csv(self.disease_path)
+        cui_list = diseases['cui'].to_list()
+        df_dis_pro_matched = df_dis_pro[df_dis_pro['dis'].isin(cui_list)]
+        selected_diseases = df_dis_pro_matched['dis'].unique().tolist()
+        return df_dis_pro_matched, selected_diseases
+
     def save_matched_diseases_to_csv(self, df_dis_pro_matched: pd.DataFrame) -> None:
         """
         Save the list of unique matched disease names to a CSV file.
@@ -227,3 +247,21 @@ class DataCompilation():
             df_pro_pro, df_dis_pro_encoded
         )
         return df_pro_pro_encoded, df_gen_pro, df_dis_gen, df_dis_pro_encoded, selected_diseases
+
+    def get_full_graph_data(self):
+        df_ddi_dru = pd.read_csv(f'{self.data_path}/Full Graph/links/ddi_dru.tsv', sep='\t')
+        df_ddi_phe = pd.read_csv(f'{self.data_path}/Full Graph/links/ddi_phe.tsv', sep='\t')
+        df_dis_dru_the = pd.read_csv(f'{self.data_path}/Full Graph/links/dis_dru_the.tsv', sep='\t')
+        df_dis_pat = pd.read_csv(f'{self.data_path}/Full Graph/links/dis_pat.tsv', sep='\t')
+        df_dis_pro = pd.read_csv(f'{self.data_path}/Full Graph/links/dis_pro.tsv', sep='\t')
+        df_dis_sym = pd.read_csv(f'{self.data_path}/Full Graph/links/dis_sym.tsv', sep='\t')
+        df_dru_dru = pd.read_csv(f'{self.data_path}/Full Graph/links/dru_dru.tsv', sep='\t')
+        df_dru_pro = pd.read_csv(f'{self.data_path}/Full Graph/links/dru_pro.tsv', sep='\t')
+        df_dru_sym_ind = pd.read_csv(f'{self.data_path}/Full Graph/links/dru_sym_ind.tsv', sep='\t')
+        df_dru_sym_sef = pd.read_csv(f'{self.data_path}/Full Graph/links/dru_sym_sef.tsv', sep='\t')
+        df_pro_pat = pd.read_csv(f'{self.data_path}/Full Graph/links/pro_pat.tsv', sep='\t')
+        df_pro_pro = pd.read_csv(f'{self.data_path}/Full Graph/links/pro_pro.tsv', sep='\t')
+        return (df_ddi_dru, df_ddi_phe, df_dis_dru_the,
+                df_dis_pat, df_dis_pro, df_dis_sym,
+                df_dru_dru, df_dru_pro, df_dru_sym_ind,
+                df_dru_sym_sef, df_pro_pat, df_pro_pro)

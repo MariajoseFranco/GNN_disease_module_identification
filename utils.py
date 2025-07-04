@@ -96,6 +96,11 @@ def mapping_dis_pro_edges_to_scores(df_dis_pro: pd.DataFrame) -> dict[tuple, flo
             for _, row in df_dis_pro.iterrows()}
 
 
+def mapping_dis_pro_edges_to_scores_full_graph(df_dis_pro: pd.DataFrame) -> dict[tuple, float]:
+    return {(row['dis'], row['pro']): row['w']
+            for _, row in df_dis_pro.iterrows()}
+
+
 # Visualization Functions
 
 def visualize_disease_protein_associations(g, diseases, max_edges=200, output_path=None):
