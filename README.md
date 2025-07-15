@@ -13,7 +13,7 @@ This project provides two pipelines for disease module identification using Grap
 
 ### 2. Subgraph Classification Task
 
-- Classify disease modules using subgraphs and homogeneous GNN encoders.
+- Predict **disease–protein** associations using a homogeneous graph.
 
 ---
 
