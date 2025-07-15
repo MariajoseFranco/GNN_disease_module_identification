@@ -11,21 +11,19 @@ This project provides two pipelines for disease module identification using Grap
 
 - Predict **disease–protein** or **disease–drug** associations using a heterogeneous graph.
 
-### 2. Subgraph Classification Task
+### 2. Subgraph Node Classification Task
 
 - Predict **disease–protein** associations using a homogeneous graph.
 
 ---
 
-## Project Structure
+## Project Main Structure
 
 ```
 GNN_DISEASE_MODULE_IDENTIFICATION/
 |
 ├── LinkPrediction/
 |   ├── utils/                 # Utility functions (building models, saving results, etc.)
-|   ├── dot_predictor.py       # Dot product predictor for link prediction
-|   ├── mlp_predictor.py        # MLP predictor for link prediction
 |   ├── heterogeneous_graph.py # Heterogeneous graph construction
 |   ├── hyperparameter_tunning.py # Hyperparameter optimization (Optuna)
 |   ├── main.py                # Entry point for Link Prediction
@@ -34,18 +32,18 @@ GNN_DISEASE_MODULE_IDENTIFICATION/
 |   └── trainer.py             # Training loop
 |
 ├── SubgraphClassification/
-|   ├── utils/                  # Utility functions for subgraph classification
-|   ├── GNN_encoder.py         # Homogeneous GNN for subgraph classification
+|   ├── utils/                  # Utility functions for subgraph node classification
+|   ├── GNN_encoder.py         # Homogeneous GNN for subgraph node classification
 |   ├── homogeneous_graph.py   # Subgraph generation and handling
 |   ├── main.py                # Entry point for Subgraph Classification
-|   └── pipeline.py            # Subgraph classification pipeline
+|   ├── pipeline.py            # Subgraph node classification pipeline
+|   └── trainer.py             # Training loop
 |
 ├── data_compilation.py         # Data loading and preparation
 ├── api_data.py                 # API data handling
 ├── visualizations.py           # Visualization utilities
 ├── config.yaml                 # Configuration file
 ├── requirements.txt            # Python dependencies
-├── README.md                   # Project description
 ```
 
 ---
@@ -74,9 +72,9 @@ Do you want to run the full graph pipeline? (y/n):
 
 ---
 
-### Subgraph Classification Task
+### Subgraph Node Classification Task
 
-Run the **Subgraph Classification task** by executing:
+Run the **Subgraph Node Classification task** by executing:
 
 ```bash
 PYTHONPATH=. python SubgraphClassification/main.py
