@@ -111,7 +111,7 @@ def run_optuna_tuning(
         if use_focal:
             loss_fn = FocalLoss().to(device)
         else:
-            loss_fn = bce_loss_fn(train_pos_g, train_neg_g, edge_type_)
+            loss_fn = bce_loss_fn(train_pos_g, train_neg_g, edge_type_, device)
 
         h, _, val_acc, val_f1, _, _, _ = training_loop(
             100, model, train_pos_g, train_neg_g, train_g,
