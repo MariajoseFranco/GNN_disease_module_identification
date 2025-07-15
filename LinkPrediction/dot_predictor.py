@@ -1,28 +1,47 @@
+from typing import Dict, Tuple
+
+import dgl
 import dgl.function as fn
 import torch.nn as nn
+from torch import Tensor
 
 
 class DotPredictor(nn.Module):
-    def forward(self, g, h_dict, etype, use_seed_score=True):
+    """
+    Dot Product Predictor for Link Prediction in Heterogeneous Graphs.
+
+    Computes link scores by applying the dot product between the source and
+    destination node embeddings for a given edge type. Optionally, it adds
+    precomputed seed scores if available in the edge data.
+    """
+
+    def forward(
+        self,
+        g: dgl.DGLHeteroGraph,
+        h_dict: Dict[str, Tensor],
+        etype: Tuple[str, str, str],
+        use_seed_score: bool = True
+    ) -> Tensor:
         """
-        Compute link prediction scores for a heterogeneous graph using a dot
-        product between node embeddings.
+        Compute link prediction scores for a specified edge type using node embeddings.
 
         Args:
-            g (dgl.DGLHeteroGraph): The heterogeneous graph.
-            h_dict (dict): Dictionary of node embeddings, with node types as keys.
-            etype (tuple): Edge type for which predictions are computed
-            (src_type, relation, dst_type).
+            g (dgl.DGLHeteroGraph): Input heterogeneous graph.
+            h_dict (dict): Node embeddings per node type. Keys are node types,
+            values are tensors (N_nodes, dim).
+            etype (tuple): Edge type to compute predictions for: (src_type, relation, dst_type).
+            use_seed_score (bool, optional): If True, adds 'seed_score' from
+            the edge data if present. Default is True.
 
         Returns:
-            torch.Tensor: A 1D tensor of scores for each edge of the specified edge type.
+            Tensor: A 1D tensor of predicted scores for each edge of the specified edge type.
         """
         with g.local_scope():
             src_type, _, dst_type = g.to_canonical_etype(etype)
             g.nodes[src_type].data['h'] = h_dict[src_type]
             g.nodes[dst_type].data['h'] = h_dict[dst_type]
 
-            # Compute dot product
+            # Compute dot product between source and destination node embeddings
             g.apply_edges(fn.u_dot_v('h', 'h', 'score'), etype=etype)
             dot_score = g.edges[etype].data['score'].squeeze()
             if use_seed_score and 'seed_score' in g.edges[etype].data:
